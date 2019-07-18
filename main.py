@@ -1,43 +1,56 @@
 import os
+import math
 import numpy as np
 import tensorflow as tf
 import best_checkpoint_exporter
 from tensorflow.python.platform import gfile
 import itertools
+import oreba_cnn_lstm
+import lstm
 
 
+ORIGINAL_SIZE = 140
+FRAME_SIZE = 128
+NUM_CHANNELS = 3
+SEQ_LENGTH = 16
 NUM_SHARDS = 10
 FLAGS = tf.app.flags.FLAGS
 tf.app.flags.DEFINE_integer(
     name='batch_size', default=32, help='Batch size used for training.')
 tf.app.flags.DEFINE_string(
-    name='eval_dir', default='../data/eval_3d_cnn', help='Directory for eval data.')
+    name='eval_dir', default='data/raw/eval', help='Directory for eval data.')
+tf.app.flags.DEFINE_enum(
+    name='input_mode', default="raw", enum_values=["fc7", "raw"],
+    help='What does the input data look like.')
 tf.app.flags.DEFINE_enum(
     name='mode', default="train_and_evaluate", enum_values=["train_and_evaluate", "predict"],
     help='What mode should tensorflow be started in')
 tf.app.flags.DEFINE_string(
+    name='model', default='oreba_cnn_lstm',
+    help='Select the model: {oreba_cnn_lstm, lstm}')
+tf.app.flags.DEFINE_string(
     name='model_dir', default='run',
     help='Output directory for model and training stats.')
 tf.app.flags.DEFINE_integer(
-    name='num_examples', default=297471, help='Number of training example steps.')
+    name='num_features', default=2048, help='Number of fc7 features as input.')
 tf.app.flags.DEFINE_integer(
-    name='num_features', default=1024, help='Number of fc7 features as input.')
+    name='num_seq', default=396960, help='Number of training sequences.')
 tf.app.flags.DEFINE_integer(
-    name='seq_length', default=40,
+    name='seq_length', default=16,
     help='Number of sequence elements.')
 tf.app.flags.DEFINE_integer(
-    name='seq_shift', default=20,
+    name='seq_shift', default=1,
     help='Number of sequence elements.')
 tf.app.flags.DEFINE_string(
-    name='train_dir', default='../data/train_3d_cnn', help='Directory for training data.')
+    name='train_dir', default='data/raw/train', help='Directory for training data.')
 tf.app.flags.DEFINE_float(
-    name='train_epochs', default=10, help='Number of training epochs.')
+    name='train_epochs', default=60, help='Number of training epochs.')
 
 
 def run_experiment(arg=None):
     """Run the experiment."""
 
-    steps_per_epoch = int(FLAGS.num_examples / FLAGS.batch_size * FLAGS.seq_shift / FLAGS.seq_length)
+    steps_per_epoch = int(FLAGS.num_seq / FLAGS.batch_size * FLAGS.seq_shift / FLAGS.seq_length)
     max_steps = steps_per_epoch * FLAGS.train_epochs
 
     # Model parameters
@@ -45,11 +58,11 @@ def run_experiment(arg=None):
         adam_epsilon=1e-8,
         base_learning_rate=1e-4,
         batch_size=FLAGS.batch_size,
-        decay_rate=0.9,
-        dropout=0.6,
+        data_format='channels_last',
+        decay_rate=0.94,
+        dropout=0.5,
         gradient_clipping_norm=10.0,
         num_classes=2,
-        num_lstm=128,
         seq_length=FLAGS.seq_length,
         steps_per_epoch=steps_per_epoch)
 
@@ -102,15 +115,17 @@ def model_fn(features, labels, mode, params):
     is_training = mode == tf.estimator.ModeKeys.TRAIN
     is_predicting = mode == tf.estimator.ModeKeys.PREDICT
 
-    # Set features to correct shape
-    features = tf.reshape(features,
-        [params.batch_size, params.seq_length, FLAGS.num_features])
-
     # Model
-    logits = model(features, params)
+    if FLAGS.model == "oreba_cnn_lstm":
+        model = oreba_cnn_lstm.Model(params)
+    elif FLAGS.model == "lstm":
+        model = lstm.Model(params)
+
+    logits = model(features, is_training)
 
     # Decode logits into predictions
     predictions, _ = greedy_decode_with_indices(logits, params.num_classes, params.seq_length)
+
     pred_export = {
         'classes': tf.reshape(predictions, [-1]),
         'logits': tf.reshape(logits, [-1, params.num_classes+1])}
@@ -131,7 +146,7 @@ def model_fn(features, labels, mode, params):
         return sparse
 
     # Calculate ctc loss from SparseTensor without collapsing labels
-    # Works with preprocess_collapse_repeated=False, ctc_merge_repeated=False
+    # Works with preprocess_collapse_repeated=False, ctc_merge_repeated=False (implication that labelling could be simplified!)
     # Also works with preprocess_collapse_repeated=True, ctc_merge_repeated=False
     seq_length = tf.fill([params.batch_size], params.seq_length)
     loss = tf.nn.ctc_loss(
@@ -204,26 +219,6 @@ def model_fn(features, labels, mode, params):
         loss=loss,
         train_op=train_op,
         eval_metric_ops=metrics)
-
-
-def model(inputs, params):
-    """The estimator model."""
-    inputs = tf.keras.layers.Bidirectional(
-        tf.keras.layers.LSTM(
-            units=params.num_lstm,
-            dropout=params.dropout,
-            recurrent_dropout=params.dropout,
-            return_sequences=True))(inputs)
-    inputs = tf.keras.layers.Bidirectional(
-        tf.keras.layers.LSTM(
-            units=params.num_lstm,
-            dropout=params.dropout,
-            recurrent_dropout=params.dropout,
-            return_sequences=True))(inputs)
-    num_classes = params.num_classes + 1
-    inputs = tf.keras.layers.Dense(
-            units=num_classes)(inputs)
-    return inputs
 
 
 def collapse_sequences(labels, seq_length, def_val=1, pad_val=0, replace_with_idle=True, pos='middle'):
@@ -681,7 +676,7 @@ def f1_metric(labels, predictions, seq_length, metric_fn, metrics_collections=No
 
         def compute_f1(pre, rec, name):
             return tf.where(
-                tf.greater(pre + rec, 0), tf.math.divide(2 * pre * rec, pre + rec), 0, name)
+                tf.greater(pre + rec, 0), tf.divide(2 * pre * rec, pre + rec), 0, name)
 
         f1 = _aggregate_across_replicas(
             metrics_collections, lambda _, pre, rec: compute_f1(pre, rec, 'value'), pre, rec)
@@ -692,21 +687,6 @@ def f1_metric(labels, predictions, seq_length, metric_fn, metrics_collections=No
             tf.add_to_collections(updates_collections, f1_update_op)
 
         return f1, f1_update_op
-
-
-def input_parser(serialized_example):
-    features = tf.parse_single_example(
-        serialized_example, {
-            'example/video_id': tf.FixedLenFeature([], dtype=tf.int64),
-            'example/label': tf.FixedLenFeature([], dtype=tf.int64),
-            'example/prob_1': tf.FixedLenFeature([], dtype=tf.float32),
-            'example/fc7': tf.FixedLenFeature([1024], dtype=tf.float32)
-    })
-    # Convert label to one-hot encoding
-    label = tf.cast(features['example/label'], tf.int32)
-    fc7 = features['example/fc7']
-    prob = features['example/prob_1']
-    return fc7, label
 
 
 def input_fn(is_training, data_dir):
@@ -721,20 +701,144 @@ def input_fn(is_training, data_dir):
     # Shuffle files if needed
     if is_training:
         files = files.shuffle(NUM_SHARDS)
-    shift = FLAGS.seq_shift if is_training else FLAGS.seq_length
     dataset = files.interleave(
         lambda filename:
             tf.data.TFRecordDataset(filename)
-            .map(map_func=input_parser)
-            .window(size=FLAGS.seq_length, shift=shift, drop_remainder=True)
-            .flat_map(lambda f_w, l_w: tf.data.Dataset.zip(
-                (f_w.batch(FLAGS.seq_length), l_w.batch(FLAGS.seq_length)))),
+            .map(map_func=_get_input_parser(), num_parallel_calls=2)
+            .apply(_get_sequence_batch_fn(is_training))
+            .map(map_func=_get_transformation_parser(is_training),
+                num_parallel_calls=2),
         cycle_length=NUM_SHARDS)
     if is_training:
-        dataset = dataset.shuffle(10000).repeat()
+        dataset = dataset.shuffle(1000).repeat()
     dataset = dataset.batch(FLAGS.batch_size, drop_remainder=True)
 
     return dataset
+
+
+def _get_input_parser():
+
+    def input_parser_fc7(serialized_example):
+        features = tf.parse_single_example(
+            serialized_example, {
+                'example/label': tf.FixedLenFeature([], dtype=tf.int64),
+                'example/fc7': tf.FixedLenFeature([FLAGS.num_features], dtype=tf.float32)
+        })
+        label = tf.cast(features['example/label'], tf.int32)
+        fc7 = features['example/fc7']
+        return fc7, label
+
+    def input_parser_raw(serialized_example):
+        features = tf.parse_single_example(
+            serialized_example, {
+                'example/label_1': tf.FixedLenFeature([], dtype=tf.int64),
+                'example/image': tf.FixedLenFeature([], dtype=tf.string)
+        })
+        label = tf.cast(features['example/label_1'], tf.int32)
+        image_data = tf.decode_raw(features['example/image'], tf.uint8)
+        image_data = tf.cast(image_data, tf.float32)
+        image_data = tf.reshape(image_data,
+            [ORIGINAL_SIZE, ORIGINAL_SIZE, NUM_CHANNELS])
+        return image_data, label
+
+    if FLAGS.input_mode == "fc7":
+        return input_parser_fc7
+    elif FLAGS.input_mode == "raw":
+        return input_parser_raw
+
+
+def _get_sequence_batch_fn(is_training):
+    """Return sliding batched dataset or batched dataset."""
+    shift = FLAGS.seq_shift if is_training else FLAGS.seq_length
+    if tf.__version__ < "1.13.1":
+        return tf.contrib.data.sliding_window_batch(
+            window_size=FLAGS.seq_length, window_shift=FLAGS.seq_shift)
+    else:
+        return lambda dataset: dataset.window(
+        size=FLAGS.seq_length, shift=shift, drop_remainder=True).flat_map(
+        lambda f_w, l_w: tf.data.Dataset.zip(
+            (f_w.batch(FLAGS.seq_length), l_w.batch(FLAGS.seq_length))))
+
+
+def _get_transformation_parser(is_training):
+    """Return the data transformation parser."""
+
+    def transformation_parser(image_data, label_data):
+        """Apply distortions to sequences."""
+
+        if is_training:
+
+            # Random rotation
+            rotation_degree = tf.random_uniform([], -2.0, 2.0)
+            rotation_radian = rotation_degree * math.pi / 180
+            image_data = tf.contrib.image.rotate(image_data,
+                angles=rotation_radian)
+
+            # Random crop
+            diff = ORIGINAL_SIZE - FRAME_SIZE + 1
+            limit = [1, diff, diff, 1]
+            offset = tf.random_uniform(shape=tf.shape(limit),
+                dtype=tf.int32, maxval=tf.int32.max) % limit
+            size = [SEQ_LENGTH, FRAME_SIZE, FRAME_SIZE, NUM_CHANNELS]
+            image_data = tf.slice(image_data, offset, size)
+
+            # Random horizontal flip
+            condition = tf.less(tf.random_uniform([], 0, 1.0), .5)
+            image_data = tf.cond(pred=condition,
+                true_fn=lambda: tf.image.flip_left_right(image_data),
+                false_fn=lambda: image_data)
+
+            # Random brightness change
+            def _adjust_brightness(image_data, delta):
+                if tf.shape(image_data)[0] == 4:
+                    brightness = lambda x: tf.image.adjust_brightness(x, delta)
+                    return tf.map_fn(brightness, image_data)
+                else:
+                    return tf.image.adjust_brightness(image_data, delta)
+            delta = tf.random_uniform([], -63, 63)
+            image_data = _adjust_brightness(image_data, delta)
+
+            # Random contrast change -
+            def _adjust_contrast(image_data, contrast_factor):
+                if tf.shape(image_data)[0] == 4:
+                    contrast = lambda x: tf.image.adjust_contrast(x, contrast_factor)
+                    return tf.map_fn(contrast, image_data)
+                else:
+                    return tf.image.adjust_contrast(image_data, contrast_factor)
+            contrast_factor = tf.random_uniform([], 0.2, 1.8)
+            image_data = _adjust_contrast(image_data, contrast_factor)
+
+        else:
+
+            # Crop the central [height, width].
+            image_data = tf.image.resize_image_with_crop_or_pad(
+                image_data, FRAME_SIZE, FRAME_SIZE)
+            size = [SEQ_LENGTH, FRAME_SIZE, FRAME_SIZE, NUM_CHANNELS]
+            image_data.set_shape(size)
+
+        # Subtract off the mean and divide by the variance of the pixels.
+        def _standardization(images):
+            """Linearly scales image data to have zero mean and unit variance."""
+            num_pixels = tf.reduce_prod(tf.shape(images))
+            images_mean = tf.reduce_mean(images)
+            variance = tf.reduce_mean(tf.square(images)) - tf.square(images_mean)
+            variance = tf.nn.relu(variance)
+            stddev = tf.sqrt(variance)
+            # Apply a minimum normalization that protects us against uniform images.
+            min_stddev = tf.rsqrt(tf.cast(num_pixels, dtype=tf.float32))
+            pixel_value_scale = tf.maximum(stddev, min_stddev)
+            pixel_value_offset = images_mean
+            images = tf.subtract(images, pixel_value_offset)
+            images = tf.divide(images, pixel_value_scale)
+            return images
+        image_data = _standardization(image_data)
+
+        return image_data, label_data
+
+    if FLAGS.input_mode == "fc7":
+        return lambda dataset: dataset
+    elif FLAGS.input_mode == "raw":
+        return transformation_parser
 
 
 def predict_and_export_csv(estimator, eval_input_fn, eval_dir):
