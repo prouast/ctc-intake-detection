@@ -65,6 +65,7 @@ class Model(object):
         """
         self.num_conv = [32, 32, 64, 64]
         self.frame_size = 128
+        self.num_channels = 3
         self.seq_length = 16
         self.num_dense = 1024
         self.num_lstm = 128
@@ -83,9 +84,8 @@ class Model(object):
         """
         with tf.variable_scope(scope):
             # Reshape and feed all images through CNN
-            num_channels = inputs.get_shape()[4]
             inputs = tf.reshape(inputs,
-                [-1, self.frame_size, self.frame_size, num_channels])
+                [-1, self.frame_size, self.frame_size, self.num_channels])
             # Convert to channels_first if necessary (performance boost)
             if self.data_format == 'channels_first':
                 inputs = tf.transpose(a=inputs, perm=[0, 3, 1, 2])
