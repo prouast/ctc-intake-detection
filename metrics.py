@@ -159,10 +159,16 @@ def pre_rec(labels, predictions, seq_length, metric_fn, metrics_collections=None
             return tf.where(
                 tf.greater(tp + fn, 0), tf.divide(tp, tp + fn), 0, name)
 
-        pre = _aggregate_across_replicas(
-            metrics_collections, lambda _, tp, fp: compute_precision(tp, fp, 'value'), tp, fp)
-        rec = _aggregate_across_replicas(
-            metrics_collections, lambda _, tp, fn: compute_recall(tp, fn, 'value'), tp, fn)
+        if tf.__version__ < "1.13.1":
+            pre = _aggregate_across_towers(
+                metrics_collections, lambda _, tp, fp: compute_precision(tp, fp, 'value'), tp, fp)
+            rec = _aggregate_across_towers(
+                metrics_collections, lambda _, tp, fn: compute_recall(tp, fn, 'value'), tp, fn)
+        else:
+            pre = _aggregate_across_replicas(
+                metrics_collections, lambda _, tp, fp: compute_precision(tp, fp, 'value'), tp, fp)
+            rec = _aggregate_across_replicas(
+                metrics_collections, lambda _, tp, fn: compute_recall(tp, fn, 'value'), tp, fn)
 
         pre_update_op = compute_precision(tp_update_op, fp_update_op, 'update_op')
         rec_update_op = compute_recall(tp_update_op, fn_update_op, 'update_op')
@@ -196,8 +202,12 @@ def f1_metric(labels, predictions, seq_length, metric_fn, metrics_collections=No
             return tf.where(
                 tf.greater(pre + rec, 0), tf.divide(2 * pre * rec, pre + rec), 0, name)
 
-        f1 = _aggregate_across_replicas(
-            metrics_collections, lambda _, pre, rec: compute_f1(pre, rec, 'value'), pre, rec)
+        if tf.__version__ < "1.13.1":
+            f1 = _aggregate_across_towers(
+                metrics_collections, lambda _, pre, rec: compute_f1(pre, rec, 'value'), pre, rec)
+        else:
+            f1 = _aggregate_across_replicas(
+                metrics_collections, lambda _, pre, rec: compute_f1(pre, rec, 'value'), pre, rec)
 
         f1_update_op = compute_f1(pre_update_op, rec_update_op, 'update_op')
 

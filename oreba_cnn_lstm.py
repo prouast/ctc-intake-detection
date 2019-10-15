@@ -66,10 +66,10 @@ class Model(object):
         self.num_conv = [32, 32, 64, 64]
         self.frame_size = 128
         self.num_channels = 3
-        self.seq_length = 16
+        self.seq_length = params.seq_length
         self.num_dense = 1024
         self.num_lstm = 128
-        self.num_classes = 2
+        self.num_classes = params.num_classes
         self.data_format = params.data_format
 
     def __call__(self, inputs, is_training, scope=SCOPE):

@@ -16,11 +16,12 @@ import oreba_lstm
 ORIGINAL_SIZE = 140
 FRAME_SIZE = 128
 NUM_CHANNELS = 3
-SEQ_LENGTH = 16
 NUM_SHARDS = 10
 FLAGS = tf.app.flags.FLAGS
 tf.app.flags.DEFINE_integer(
-    name='batch_size', default=32, help='Batch size used for training.')
+    name='batch_size', default=16, help='Batch size used for training.')
+tf.app.flags.DEFINE_float(
+    name='decay_rate', default=0.94, help='Rate at which learning rate decays.')
 tf.app.flags.DEFINE_string(
     name='eval_dir', default='data/raw/eval', help='Directory for eval data.')
 tf.app.flags.DEFINE_enum(
@@ -40,18 +41,23 @@ tf.app.flags.DEFINE_integer(
 tf.app.flags.DEFINE_integer(
     name='num_seq', default=396960, help='Number of training sequences.')
 tf.app.flags.DEFINE_integer(
-    name='seq_shift', default=1,
+    name='seq_length', default=16,
     help='Number of sequence elements.')
+tf.app.flags.DEFINE_integer(
+    name='seq_shift', default=1,
+    help='Shift in sequence generation.')
 tf.app.flags.DEFINE_string(
     name='train_dir', default='data/raw/train', help='Directory for training data.')
 tf.app.flags.DEFINE_float(
-    name='train_epochs', default=60, help='Number of training epochs.')
+    name='train_epochs', default=200, help='Number of training epochs.')
+
+tf.logging.set_verbosity(tf.logging.INFO)
 
 
 def run_experiment(arg=None):
     """Run the experiment."""
 
-    steps_per_epoch = int(FLAGS.num_seq / FLAGS.batch_size * FLAGS.seq_shift / SEQ_LENGTH)
+    steps_per_epoch = int(FLAGS.num_seq / FLAGS.batch_size * FLAGS.seq_shift / FLAGS.seq_length)
     max_steps = steps_per_epoch * FLAGS.train_epochs
 
     # Model parameters
@@ -60,10 +66,11 @@ def run_experiment(arg=None):
         base_learning_rate=1e-4,
         batch_size=FLAGS.batch_size,
         data_format='channels_last',
-        decay_rate=0.94,
+        decay_rate=FLAGS.decay_rate,
         dropout=0.5,
         gradient_clipping_norm=10.0,
         num_classes=2,
+        seq_length=FLAGS.seq_length,
         steps_per_epoch=steps_per_epoch)
 
     # Bugfix, see https://github.com/tensorflow/tensorflow/issues/23780
@@ -73,9 +80,9 @@ def run_experiment(arg=None):
 
     # Run config
     run_config = tf.estimator.RunConfig(
-        model_dir="run",
-        save_summary_steps=10,
-        save_checkpoints_steps=50,
+        model_dir=FLAGS.model_dir,
+        save_summary_steps=100,
+        save_checkpoints_steps=1000,
         session_config=session_config)
 
     # Define the estimator
@@ -130,7 +137,7 @@ def model_fn(features, labels, mode, params):
     logits = model(features, is_training)
 
     # Decode logits into predictions
-    predictions, _ = greedy_decode_with_indices(logits, params.num_classes, SEQ_LENGTH)
+    predictions, _ = greedy_decode_with_indices(logits, params.num_classes, FLAGS.seq_length)
 
     pred_export = {
         'classes': tf.reshape(predictions, [-1]),
@@ -152,7 +159,7 @@ def model_fn(features, labels, mode, params):
         return sparse
 
     # Calculate ctc loss from SparseTensor without collapsing labels
-    seq_length = tf.fill([params.batch_size], SEQ_LENGTH)
+    seq_length = tf.fill([params.batch_size], FLAGS.seq_length)
     loss = tf.nn.ctc_loss(
         labels=dense_to_sparse(labels, eos_token=-1),
         inputs=logits,
@@ -205,8 +212,8 @@ def model_fn(features, labels, mode, params):
         train_op = None
 
     # Calculate metrics
-    pre, rec, pre_op, rec_op = pre_rec(labels, predictions, SEQ_LENGTH, evaluate_interval_detection)
-    f1, f1_op = f1_metric(labels, predictions, SEQ_LENGTH, evaluate_interval_detection)
+    pre, rec, pre_op, rec_op = pre_rec(labels, predictions, FLAGS.seq_length, evaluate_interval_detection)
+    f1, f1_op = f1_metric(labels, predictions, FLAGS.seq_length, evaluate_interval_detection)
 
     # Save metrics
     tf.summary.scalar('metrics/precision', pre_op)
@@ -246,7 +253,7 @@ def input_fn(is_training, data_dir):
                 num_parallel_calls=2),
         cycle_length=NUM_SHARDS)
     if is_training:
-        dataset = dataset.shuffle(1000).repeat()
+        dataset = dataset.shuffle(5000).repeat()
     dataset = dataset.batch(FLAGS.batch_size, drop_remainder=True)
 
     return dataset
@@ -285,15 +292,15 @@ def _get_input_parser():
 
 def _get_sequence_batch_fn(is_training):
     """Return sliding batched dataset or batched dataset."""
-    shift = FLAGS.seq_shift if is_training else SEQ_LENGTH
+    shift = FLAGS.seq_shift if is_training else FLAGS.seq_length
     if tf.__version__ < "1.13.1":
         return tf.contrib.data.sliding_window_batch(
-            window_size=SEQ_LENGTH, window_shift=FLAGS.seq_shift)
+            window_size=FLAGS.seq_length, window_shift=FLAGS.seq_shift)
     else:
         return lambda dataset: dataset.window(
-            size=SEQ_LENGTH, shift=shift, drop_remainder=True).flat_map(
+            size=FLAGS.seq_length, shift=shift, drop_remainder=True).flat_map(
                 lambda f_w, l_w: tf.data.Dataset.zip(
-                    (f_w.batch(SEQ_LENGTH), l_w.batch(SEQ_LENGTH))))
+                    (f_w.batch(FLAGS.seq_length), l_w.batch(FLAGS.seq_length))))
 
 
 def _get_transformation_parser(is_training):
@@ -315,7 +322,7 @@ def _get_transformation_parser(is_training):
             limit = [1, diff, diff, 1]
             offset = tf.random_uniform(shape=tf.shape(limit),
                 dtype=tf.int32, maxval=tf.int32.max) % limit
-            size = [SEQ_LENGTH, FRAME_SIZE, FRAME_SIZE, NUM_CHANNELS]
+            size = [FLAGS.seq_length, FRAME_SIZE, FRAME_SIZE, NUM_CHANNELS]
             image_data = tf.slice(image_data, offset, size)
 
             # Random horizontal flip
@@ -349,7 +356,7 @@ def _get_transformation_parser(is_training):
             # Crop the central [height, width].
             image_data = tf.image.resize_image_with_crop_or_pad(
                 image_data, FRAME_SIZE, FRAME_SIZE)
-            size = [SEQ_LENGTH, FRAME_SIZE, FRAME_SIZE, NUM_CHANNELS]
+            size = [FLAGS.seq_length, FRAME_SIZE, FRAME_SIZE, NUM_CHANNELS]
             image_data.set_shape(size)
 
         # Subtract off the mean and divide by the variance of the pixels.
