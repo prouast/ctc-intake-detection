@@ -2,7 +2,7 @@
 
 import tensorflow as tf
 
-SCOPE = "oreba_cnn_lstm"
+SCOPE = "video_small_cnn_lstm"
 
 
 def channels_axis(inputs, data_format):

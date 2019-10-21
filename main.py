@@ -10,8 +10,8 @@ from ctc import greedy_decode_with_indices
 from ctc import evaluate_interval_detection
 from metrics import pre_rec
 from metrics import f1_metric
-import oreba_cnn_lstm
-import oreba_lstm
+import video_small_cnn_lstm
+import lstm
 
 ORIGINAL_SIZE = 140
 FRAME_SIZE = 128
@@ -25,19 +25,21 @@ tf.app.flags.DEFINE_float(
 tf.app.flags.DEFINE_string(
     name='eval_dir', default='data/raw/eval', help='Directory for eval data.')
 tf.app.flags.DEFINE_enum(
-    name='input_mode', default="raw", enum_values=["fc7", "raw"],
-    help='What does the input data look like.')
+    name='input_mode', default="video_raw", enum_values=["video_raw", "inert", "video_fc7"],
+    help='What is the input mode')
+tf.app.flags.DEFINE_integer(
+    name='input_features', default=2048, help='Number of input features.')
+tf.app.flags.DEFINE_integer(
+    name='input_fps', default=8, help='Number of input frames per second.')
 tf.app.flags.DEFINE_enum(
     name='mode', default="train_and_evaluate", enum_values=["train_and_evaluate", "predict"],
     help='What mode should tensorflow be started in')
 tf.app.flags.DEFINE_string(
-    name='model', default='oreba_cnn_lstm',
-    help='Select the model: {oreba_cnn_lstm, oreba_lstm}')
+    name='model', default='video_small_cnn_lstm',
+    help='Select the model: {lstm, video_small_cnn_lstm, inert_small_cnn_lstm}')
 tf.app.flags.DEFINE_string(
     name='model_dir', default='run',
     help='Output directory for model and training stats.')
-tf.app.flags.DEFINE_integer(
-    name='num_features', default=2048, help='Number of fc7 features as input.')
 tf.app.flags.DEFINE_integer(
     name='num_seq', default=396960, help='Number of training sequences.')
 tf.app.flags.DEFINE_integer(
@@ -129,10 +131,10 @@ def model_fn(features, labels, mode, params):
     is_predicting = mode == tf.estimator.ModeKeys.PREDICT
 
     # Model
-    if FLAGS.model == "oreba_cnn_lstm":
-        model = oreba_cnn_lstm.Model(params)
-    elif FLAGS.model == "oreba_lstm":
-        model = oreba_lstm.Model(params)
+    if FLAGS.model == "video_small_cnn_lstm":
+        model = video_small_cnn_lstm.Model(params)
+    elif FLAGS.model == "lstm":
+        model = lstm.Model(params)
 
     logits = model(features, is_training)
 
@@ -261,17 +263,17 @@ def input_fn(is_training, data_dir):
 
 def _get_input_parser():
 
-    def input_parser_fc7(serialized_example):
+    def input_parser_video_fc7(serialized_example):
         features = tf.parse_single_example(
             serialized_example, {
                 'example/label': tf.FixedLenFeature([], dtype=tf.int64),
-                'example/fc7': tf.FixedLenFeature([FLAGS.num_features], dtype=tf.float32)
+                'example/fc7': tf.FixedLenFeature([FLAGS.input_features], dtype=tf.float32)
         })
         label = tf.cast(features['example/label'], tf.int32)
         fc7 = features['example/fc7']
         return fc7, label
 
-    def input_parser_raw(serialized_example):
+    def input_parser_video_raw(serialized_example):
         features = tf.parse_single_example(
             serialized_example, {
                 'example/label_1': tf.FixedLenFeature([], dtype=tf.int64),
@@ -284,10 +286,10 @@ def _get_input_parser():
             [ORIGINAL_SIZE, ORIGINAL_SIZE, NUM_CHANNELS])
         return image_data, label
 
-    if FLAGS.input_mode == "fc7":
-        return input_parser_fc7
-    elif FLAGS.input_mode == "raw":
-        return input_parser_raw
+    if FLAGS.input_mode == "video_fc7":
+        return input_parser_video_fc7
+    elif FLAGS.input_mode == "video_raw":
+        return input_parser_video_raw
 
 
 def _get_sequence_batch_fn(is_training):
@@ -378,9 +380,9 @@ def _get_transformation_parser(is_training):
 
         return image_data, label_data
 
-    if FLAGS.input_mode == "fc7":
+    if FLAGS.input_mode == "video_fc7":
         return lambda f, l: (f, l)
-    elif FLAGS.input_mode == "raw":
+    elif FLAGS.input_mode == "video_raw":
         return transformation_parser
 
 

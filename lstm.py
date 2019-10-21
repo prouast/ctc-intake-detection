@@ -2,7 +2,7 @@
 
 import tensorflow as tf
 
-SCOPE = "oreba_lstm"
+SCOPE = "lstm"
 
 
 class Model(object):
