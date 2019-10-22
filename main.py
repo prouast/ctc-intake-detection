@@ -11,17 +11,19 @@ from ctc import evaluate_interval_detection
 from metrics import pre_rec
 from metrics import f1_metric
 import video_small_cnn_lstm
+import inert_small_cnn_lstm
 import lstm
 
 ORIGINAL_SIZE = 140
 FRAME_SIZE = 128
 NUM_CHANNELS = 3
 NUM_SHARDS = 10
+NUM_SHUFFLE = 5000
 FLAGS = tf.app.flags.FLAGS
 tf.app.flags.DEFINE_integer(
     name='batch_size', default=16, help='Batch size used for training.')
 tf.app.flags.DEFINE_float(
-    name='decay_rate', default=0.94, help='Rate at which learning rate decays.')
+    name='decay_rate', default=0.92, help='Rate at which learning rate decays.')
 tf.app.flags.DEFINE_string(
     name='eval_dir', default='data/raw/eval', help='Directory for eval data.')
 tf.app.flags.DEFINE_enum(
@@ -45,6 +47,8 @@ tf.app.flags.DEFINE_integer(
 tf.app.flags.DEFINE_integer(
     name='seq_length', default=16,
     help='Number of sequence elements.')
+tf.app.flags.DEFINE_integer(
+    name='seq_pool', default=1, help='Factor of sequence pooling in the model.')
 tf.app.flags.DEFINE_integer(
     name='seq_shift', default=1,
     help='Shift in sequence generation.')
@@ -133,13 +137,21 @@ def model_fn(features, labels, mode, params):
     # Model
     if FLAGS.model == "video_small_cnn_lstm":
         model = video_small_cnn_lstm.Model(params)
+    elif FLAGS.model == "inert_small_cnn_lstm":
+        model = inert_small_cnn_lstm.Model(params)
     elif FLAGS.model == "lstm":
         model = lstm.Model(params)
 
     logits = model(features, is_training)
 
+    # Update seq_length according to seq pooling
+    if FLAGS.seq_pool > 1:
+        seq_length = int(FLAGS.seq_length / FLAGS.seq_pool)
+    else:
+        seq_length = FLAGS.seq_length
+
     # Decode logits into predictions
-    predictions, _ = greedy_decode_with_indices(logits, params.num_classes, FLAGS.seq_length)
+    predictions, _ = greedy_decode_with_indices(logits, params.num_classes, seq_length)
 
     pred_export = {
         'classes': tf.reshape(predictions, [-1]),
@@ -153,6 +165,14 @@ def model_fn(features, labels, mode, params):
                 'predict': tf.estimator.export.PredictOutput(pred_export)
             })
 
+    # If seq pooling performed in model, slice the labels as well
+    if FLAGS.seq_pool > 1:
+        labels = tf.strided_slice(input_=labels,
+            begin=[0, FLAGS.seq_pool-1],
+            end=[FLAGS.batch_size, FLAGS.seq_length],
+            strides=[1, FLAGS.seq_pool])
+    labels = tf.reshape(labels, [params.batch_size, seq_length])
+
     def dense_to_sparse(input, eos_token=0):
         idx = tf.where(tf.not_equal(input, tf.constant(eos_token, input.dtype)))
         values = tf.gather_nd(input, idx)
@@ -161,11 +181,11 @@ def model_fn(features, labels, mode, params):
         return sparse
 
     # Calculate ctc loss from SparseTensor without collapsing labels
-    seq_length = tf.fill([params.batch_size], FLAGS.seq_length)
+    seq_lengths = tf.fill([params.batch_size], seq_length)
     loss = tf.nn.ctc_loss(
         labels=dense_to_sparse(labels, eos_token=-1),
         inputs=logits,
-        sequence_length=seq_length,
+        sequence_length=seq_lengths,
         preprocess_collapse_repeated=True,
         ctc_merge_repeated=False,
         time_major=False)
@@ -214,8 +234,8 @@ def model_fn(features, labels, mode, params):
         train_op = None
 
     # Calculate metrics
-    pre, rec, pre_op, rec_op = pre_rec(labels, predictions, FLAGS.seq_length, evaluate_interval_detection)
-    f1, f1_op = f1_metric(labels, predictions, FLAGS.seq_length, evaluate_interval_detection)
+    pre, rec, pre_op, rec_op = pre_rec(labels, predictions, seq_length, evaluate_interval_detection)
+    f1, f1_op = f1_metric(labels, predictions, seq_length, evaluate_interval_detection)
 
     # Save metrics
     tf.summary.scalar('metrics/precision', pre_op)
@@ -243,25 +263,34 @@ def input_fn(is_training, data_dir):
     tf.logging.info("Found {0} files.".format(str(len(filenames))))
     # List files
     files = tf.data.Dataset.list_files(filenames)
+    # Lookup table for Labels
+    table = None
+    if FLAGS.input_mode == 'inert':
+        mapping_strings = tf.constant(["Idle", "Intake"])
+        table = tf.contrib.lookup.index_table_from_tensor(
+            mapping=mapping_strings)
+        # Initialize table
+        with tf.Session() as sess:
+            sess.run(table.init)
     # Shuffle files if needed
     if is_training:
         files = files.shuffle(NUM_SHARDS)
     dataset = files.interleave(
         lambda filename:
             tf.data.TFRecordDataset(filename)
-            .map(map_func=_get_input_parser(), num_parallel_calls=2)
+            .map(map_func=_get_input_parser(table), num_parallel_calls=2)
             .apply(_get_sequence_batch_fn(is_training))
             .map(map_func=_get_transformation_parser(is_training),
                 num_parallel_calls=2),
         cycle_length=NUM_SHARDS)
     if is_training:
-        dataset = dataset.shuffle(5000).repeat()
+        dataset = dataset.shuffle(NUM_SHUFFLE).repeat()
     dataset = dataset.batch(FLAGS.batch_size, drop_remainder=True)
 
     return dataset
 
 
-def _get_input_parser():
+def _get_input_parser(table):
 
     def input_parser_video_fc7(serialized_example):
         features = tf.parse_single_example(
@@ -286,10 +315,28 @@ def _get_input_parser():
             [ORIGINAL_SIZE, ORIGINAL_SIZE, NUM_CHANNELS])
         return image_data, label
 
+    def input_parser_inert(serialized_example):
+        features = tf.parse_single_example(
+            serialized_example, {
+                'example/label_1': tf.FixedLenFeature([], dtype=tf.string),
+                'example/dom_acc': tf.FixedLenFeature([3], dtype=tf.float32),
+                'example/dom_gyro': tf.FixedLenFeature([3], dtype=tf.float32),
+                'example/ndom_acc': tf.FixedLenFeature([3], dtype=tf.float32),
+                'example/ndom_gyro': tf.FixedLenFeature([3], dtype=tf.float32)
+        })
+        label = tf.cast(table.lookup(features['example/label_1']), tf.int32)
+        features = tf.stack(
+            [features['example/dom_acc'], features['example/dom_gyro'],
+             features['example/ndom_acc'], features['example/ndom_gyro']], 0)
+        features = tf.squeeze(tf.reshape(features, [-1, 12]))
+        return features, label
+
     if FLAGS.input_mode == "video_fc7":
         return input_parser_video_fc7
     elif FLAGS.input_mode == "video_raw":
         return input_parser_video_raw
+    elif FLAGS.input_mode == "inert":
+        return input_parser_inert
 
 
 def _get_sequence_batch_fn(is_training):
@@ -384,6 +431,8 @@ def _get_transformation_parser(is_training):
         return lambda f, l: (f, l)
     elif FLAGS.input_mode == "video_raw":
         return transformation_parser
+    elif FLAGS.input_mode == "inert":
+        return lambda f, l: (f, l)
 
 
 def predict_and_export_csv(estimator, eval_input_fn, eval_dir):
