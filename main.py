@@ -22,8 +22,6 @@ NUM_SHUFFLE = 5000
 FLAGS = tf.app.flags.FLAGS
 tf.app.flags.DEFINE_integer(
     name='batch_size', default=16, help='Batch size used for training.')
-tf.app.flags.DEFINE_float(
-    name='decay_rate', default=0.92, help='Rate at which learning rate decays.')
 tf.app.flags.DEFINE_string(
     name='eval_dir', default='data/raw/eval', help='Directory for eval data.')
 tf.app.flags.DEFINE_enum(
@@ -33,11 +31,18 @@ tf.app.flags.DEFINE_integer(
     name='input_features', default=2048, help='Number of input features.')
 tf.app.flags.DEFINE_integer(
     name='input_fps', default=8, help='Number of input frames per second.')
+tf.app.flags.DEFINE_float(
+    name='lr_base', default=1e-4, help='Base learning rate.')
+tf.app.flags.DEFINE_enum(
+    name='lr_decay_fn', default="exponential", enum_values=["exponential", "piecewise_constant"],
+    help='What is the input mode')
+tf.app.flags.DEFINE_float(
+    name='lr_decay_rate', default=0.92, help='Rate at which learning rate decays.')
 tf.app.flags.DEFINE_enum(
     name='mode', default="train_and_evaluate", enum_values=["train_and_evaluate", "predict"],
     help='What mode should tensorflow be started in')
-tf.app.flags.DEFINE_string(
-    name='model', default='video_small_cnn_lstm',
+tf.app.flags.DEFINE_enum(
+    name='model', default='video_small_cnn_lstm', enum_values=["lstm", "video_small_cnn_lstm", "inert_small_cnn_lstm"],
     help='Select the model: {lstm, video_small_cnn_lstm, inert_small_cnn_lstm}')
 tf.app.flags.DEFINE_string(
     name='model_dir', default='run',
@@ -54,7 +59,7 @@ tf.app.flags.DEFINE_integer(
     help='Shift in sequence generation.')
 tf.app.flags.DEFINE_string(
     name='train_dir', default='data/raw/train', help='Directory for training data.')
-tf.app.flags.DEFINE_float(
+tf.app.flags.DEFINE_integer(
     name='train_epochs', default=200, help='Number of training epochs.')
 
 tf.logging.set_verbosity(tf.logging.INFO)
@@ -69,12 +74,13 @@ def run_experiment(arg=None):
     # Model parameters
     params = tf.contrib.training.HParams(
         adam_epsilon=1e-8,
-        base_learning_rate=1e-4,
         batch_size=FLAGS.batch_size,
         data_format='channels_last',
-        decay_rate=FLAGS.decay_rate,
         dropout=0.5,
         gradient_clipping_norm=10.0,
+        lr_base=FLAGS.lr_base,
+        lr_boundaries=[int(steps_per_epoch*FLAGS.train_epochs*1/3), int(steps_per_epoch*FLAGS.train_epochs*2/3)],
+        lr_values=[FLAGS.lr_base, FLAGS.lr_base/10, FLAGS.lr_base/100],
         num_classes=2,
         seq_length=FLAGS.seq_length,
         steps_per_epoch=steps_per_epoch)
@@ -171,7 +177,7 @@ def model_fn(features, labels, mode, params):
             begin=[0, FLAGS.seq_pool-1],
             end=[FLAGS.batch_size, FLAGS.seq_length],
             strides=[1, FLAGS.seq_pool])
-    labels = tf.reshape(labels, [params.batch_size, seq_length])
+    labels = tf.reshape(labels, [FLAGS.batch_size, seq_length])
 
     def dense_to_sparse(input, eos_token=0):
         idx = tf.where(tf.not_equal(input, tf.constant(eos_token, input.dtype)))
@@ -181,7 +187,7 @@ def model_fn(features, labels, mode, params):
         return sparse
 
     # Calculate ctc loss from SparseTensor without collapsing labels
-    seq_lengths = tf.fill([params.batch_size], seq_length)
+    seq_lengths = tf.fill([FLAGS.batch_size], seq_length)
     loss = tf.nn.ctc_loss(
         labels=dense_to_sparse(labels, eos_token=-1),
         inputs=logits,
@@ -197,12 +203,17 @@ def model_fn(features, labels, mode, params):
         global_step = tf.train.get_or_create_global_step()
 
         def _decay_fn(learning_rate, global_step):
-            return tf.train.exponential_decay(
-                learning_rate=learning_rate, global_step=global_step,
-                decay_steps=params.steps_per_epoch, decay_rate=params.decay_rate)
+            if FLAGS.lr_decay_fn == "exponential":
+                return tf.train.exponential_decay(
+                    learning_rate=learning_rate, global_step=global_step,
+                    decay_steps=params.steps_per_epoch, decay_rate=FLAGS.lr_decay_rate)
+            elif FLAGS.lr_decay_fn == "piecewise_constant":
+                return tf.train.piecewise_constant_decay(
+                    x=global_step, boundaries=params.lr_boundaries,
+                    values=params.lr_values)
 
         # Learning rate
-        learning_rate = _decay_fn(params.base_learning_rate, global_step)
+        learning_rate = _decay_fn(params.lr_base, global_step)
         tf.identity(learning_rate, name='learning_rate')
         tf.summary.scalar('training/learning_rate', learning_rate)
 
