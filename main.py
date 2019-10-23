@@ -32,7 +32,7 @@ tf.app.flags.DEFINE_integer(
 tf.app.flags.DEFINE_integer(
     name='input_fps', default=8, help='Number of input frames per second.')
 tf.app.flags.DEFINE_float(
-    name='lr_base', default=1e-4, help='Base learning rate.')
+    name='lr_base', default=1e-3, help='Base learning rate.')
 tf.app.flags.DEFINE_enum(
     name='lr_decay_fn', default="exponential", enum_values=["exponential", "piecewise_constant"],
     help='What is the input mode')
@@ -79,8 +79,8 @@ def run_experiment(arg=None):
         dropout=0.5,
         gradient_clipping_norm=10.0,
         lr_base=FLAGS.lr_base,
-        lr_boundaries=[int(steps_per_epoch*FLAGS.train_epochs*1/3), int(steps_per_epoch*FLAGS.train_epochs*2/3)],
-        lr_values=[FLAGS.lr_base, FLAGS.lr_base/10, FLAGS.lr_base/100],
+        lr_boundaries=[6000, 18000, 30000],
+        lr_values=[1e-3, 1e-4, 1e-5, 1e-6],
         num_classes=2,
         seq_length=FLAGS.seq_length,
         steps_per_epoch=steps_per_epoch)

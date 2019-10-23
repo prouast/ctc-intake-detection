@@ -22,8 +22,8 @@ class Model(object):
         self.num_conv = [64, 64, 128, 128]
         self.num_channels = 12
         self.seq_length = params.seq_length
-        self.num_dense = 32
-        self.num_lstm = [64, 64]
+        self.num_dense = 64
+        self.num_lstm = [64, 128]
         self.num_classes = params.num_classes
 
     def __call__(self, inputs, is_training, scope=SCOPE):
