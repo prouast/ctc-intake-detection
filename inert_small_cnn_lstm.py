@@ -1,71 +1,73 @@
 """CNN-LSTM Model"""
 
+# https://stackoverflow.com/questions/52826134/keras-model-subclassing-examples
+# https://github.com/tensorflow/tensorflow/issues/29073
+
 import tensorflow as tf
 
-SCOPE = "inert_small_cnn_lstm"
+class ConvBlock(tf.keras.Model):
 
-def batch_norm(inputs, name):
-    """Performs a batch normalization using a standard set of parameters."""
-    return tf.keras.layers.BatchNormalization(
-        axis=2, center=True, scale=True, name=name, fused=True)(inputs)
+    def __init__(self, num_filters, max_pool, l2_lambda):
+        super(ConvBlock, self).__init__()
+        self.max_pool = max_pool
+        self.conv = tf.keras.layers.Conv1D(
+            filters=num_filters, kernel_size=7, padding='same',
+            activation=tf.nn.relu,
+            kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
+        self.bn = tf.keras.layers.BatchNormalization(momentum=0.9)
+        self.dropout = tf.keras.layers.Dropout(rate=0.5)
+        if max_pool:
+            self.max_pool = tf.keras.layers.MaxPool1D(pool_size=2, strides=2)
 
-class Model(object):
-    """Base class for building CNN-LSTM network."""
+    def __call__(self, inputs, training=False):
+        inputs = self.conv(inputs)
+        inputs = self.bn(inputs)
+        inputs = self.dropout(inputs)
+        if self.max_pool:
+            inputs = self.max_pool(inputs)
+        return inputs
 
-    def __init__(self, params):
-        """Create a model to learn features on an object of the dimensions
-            [seq_length, channels].
+class LSTMBlock(tf.keras.Model):
 
-        Args:
-            params: Hyperparameters.
-        """
+    def __init__(self, num_units, l2_lambda):
+        super(LSTMBlock, self).__init__()
+        self.lstm = tf.keras.layers.LSTM(
+            units=num_units, return_sequences=True,
+            kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
+
+    def __call__(self, inputs, training=False):
+        inputs = self.lstm(inputs)
+        return inputs
+
+class Model(tf.keras.Model):
+    """CNN-LSTM Model for inertial data"""
+
+    def __init__(self, num_classes, l2_lambda):
+        super(Model, self).__init__()
         self.num_conv = [64, 64, 128, 128]
-        self.num_channels = 12
-        self.seq_length = params.seq_length
         self.num_dense = 64
         self.num_lstm = [64, 128]
-        self.num_classes = params.num_classes
+        self.conv_blocks = []
+        for i, num_filters in enumerate(self.num_conv):
+            self.conv_blocks.append(ConvBlock(num_filters, i % 2 == 0, l2_lambda))
+        self.dense_1 = tf.keras.layers.Dense(
+            units=self.num_dense, activation=tf.nn.relu,
+            kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
+        self.dropout = tf.keras.layers.Dropout(rate=0.5)
+        self.lstm_blocks = []
+        for i, num_units in enumerate(self.num_lstm):
+            self.lstm_blocks.append(LSTMBlock(num_units, l2_lambda))
+        self.dense_2 = tf.keras.layers.Dense(
+            units=num_classes + 1,
+            kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
 
-    def __call__(self, inputs, is_training, scope=SCOPE):
-        """Add operations to learn features on a sequence of inertial measurements.
-
-        Args:
-            inputs: A [batch_size, seq_length, 12] tensor.
-            is_training: A boolean representing whether training is active.
-
-        Returns:
-            A tensor with shape [batch_size, seq_length//4, num_classes + 1]
-        """
-        with tf.variable_scope(scope):
-            # Conv layers
-            for i, num_filters in enumerate(self.num_conv):
-                inputs = tf.keras.layers.BatchNormalization(
-                    axis=2, center=True, scale=True, name='norm_conv2d_%d' % i,
-                    fused=True)(inputs)
-                if i > 0:
-                    inputs = tf.keras.layers.Dropout(
-                        rate=0.5, name='drop_conv2d_%d' % i)(inputs)
-                inputs = tf.keras.layers.Conv1D(
-                    filters=num_filters, kernel_size=7, padding='same',
-                    activation=tf.nn.relu, name='conv2d_%d' % i)(inputs)
-                if i % 2 == 0:
-                    inputs = tf.keras.layers.MaxPool1D(
-                        pool_size=2, strides=2, name='pool_conv2d_%d' % i)(inputs)
-            # Dense layer
-            inputs = tf.keras.layers.Dropout(
-                rate=0.5, name='drop_dense_0')(inputs)
-            inputs = tf.keras.layers.Dense(
-                units=self.num_dense, activation=tf.nn.relu,
-                name='dense_0')(inputs)
-            # LSTM layers
-            for i, num_units in enumerate(self.num_lstm):
-                inputs = tf.keras.layers.LSTM(
-                    units=num_units, return_sequences=True,
-                    name='lstm_%d' % i)(inputs)
-            # Classification layer
-            inputs = tf.keras.layers.Dropout(
-                rate=0.5, name='drop_dense_1')(inputs)
-            inputs = tf.keras.layers.Dense(
-                units=self.num_classes + 1, name='dense_1')(inputs)
-
+    def __call__(self, inputs, training=False):
+        for conv_block in self.conv_blocks:
+            inputs = conv_block(inputs)
+        inputs = self.dense_1(inputs)
+        inputs = self.dropout(inputs)
+        for lstm_block in self.lstm_blocks:
+            inputs = lstm_block(inputs)
+        inputs = self.dense_2(inputs)
+        inputs = self.dropout(inputs)
         return inputs

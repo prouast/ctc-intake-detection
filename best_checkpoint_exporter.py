@@ -3,11 +3,11 @@ Adapted from https://github.com/bluecamel/best_checkpoint_copier
 Copyright (c) 2018 Branton Davis
 """
 
+from absl import logging
 import glob
 import os
 import shutil
 import tensorflow as tf
-
 
 class Checkpoint(object):
     dir = None
@@ -20,7 +20,6 @@ class Checkpoint(object):
         self.file = os.path.basename(path)
         self.score = score
         self.path = path
-
 
 class BestCheckpointExporter(tf.estimator.Exporter):
     """This class keeps the checkpoints of the best runs."""
@@ -50,7 +49,7 @@ class BestCheckpointExporter(tf.estimator.Exporter):
         super(BestCheckpointExporter, self).__init__()
 
     def _log(self, statement):
-        tf.logging.info('[{}] {}'.format(self.__class__.__name__, statement))
+        logging.info('[{}] {}'.format(self.__class__.__name__, statement))
 
     def export(self, estimator, export_path, checkpoint_path, eval_result,
                is_the_final_export):

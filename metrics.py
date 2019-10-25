@@ -3,215 +3,232 @@
 
 import tensorflow as tf
 
+def evaluate_interval_detection(labels, predictions, def_val, seq_length):
+    """Evaluate interval detection for sequences by calculating
+        tp, fp, and fn.
 
-def _aggregate_across_replicas(metrics_collections, metric_value_fn, *args):
-    """Aggregate metric value across replicas."""
-    def fn(distribution, *a):
-        """Call `metric_value_fn` in the correct control flow context."""
-        if hasattr(distribution.extended, '_outer_control_flow_context'):
-            # pylint: disable=protected-access
-            if distribution.extended._outer_control_flow_context is None:
-                with tf.control_dependencies(None):
-                    metric_value = metric_value_fn(distribution, *a)
-            else:
-                distribution.extended._outer_control_flow_context.Enter()
-                metric_value = metric_value_fn(distribution, *a)
-                distribution.extended._outer_control_flow_context.Exit()
-                # pylint: enable=protected-access
-        else:
-            metric_value = metric_value_fn(distribution, *a)
-        if metrics_collections:
-            tf.add_to_collections(metrics_collections, metric_value)
-        return metric_value
-
-    return tf.distribute.get_replica_context().merge_call(fn, args=args)
-
-
-def _aggregate_across_towers(metrics_collections, metric_value_fn, *args):
-    """Aggregate metric value across towers."""
-    def fn(distribution, *a):
-        """Call `metric_value_fn` in the correct control flow context."""
-        if hasattr(distribution, '_outer_control_flow_context'):
-            # pylint: disable=protected-access
-            if distribution._outer_control_flow_context is None:
-                with tf.control_dependencies(None):
-                    metric_value = metric_value_fn(distribution, *a)
-            else:
-                distribution._outer_control_flow_context.Enter()
-                metric_value = metric_value_fn(distribution, *a)
-                distribution._outer_control_flow_context.Exit()
-                # pylint: enable=protected-access
-        else:
-            metric_value = metric_value_fn(distribution, *a)
-        if metrics_collections:
-            tf.add_to_collections(metrics_collections, metric_value)
-        return metric_value
-
-    return tf.contrib.distribute.get_tower_context().merge_call(fn, *args)
-
-
-def _aggregate_variable(v, collections):
-    f = lambda distribution, value: distribution.read_var(value)
-    if tf.__version__ < "1.13.1":
-        return _aggregate_across_towers(collections, f, v)
-    else:
-        return _aggregate_across_replicas(collections, f, v)
-
-
-def _metric_variable(shape, dtype, validate_shape=True, name=None):
-  """Create variable in `GraphKeys.(LOCAL|METRIC_VARIABLES)` collections.
-  If running in a `DistributionStrategy` context, the variable will be
-  "replica local". This means:
-  *   The returned object will be a container with separate variables
-      per replica of the model.
-  *   When writing to the variable, e.g. using `assign_add` in a metric
-      update, the update will be applied to the variable local to the
-      replica.
-  *   To get a metric's result value, we need to sum the variable values
-      across the replicas before computing the final answer. Furthermore,
-      the final answer should be computed once instead of in every
-      replica. Both of these are accomplished by running the computation
-      of the final result value inside
-      `distribution_strategy_context.get_replica_context().merge_call(fn)`.
-      Inside the `merge_call()`, ops are only added to the graph once
-      and access to a replica-local variable in a computation returns
-      the sum across all replicas.
-  Args:
-    shape: Shape of the created variable.
-    dtype: Type of the created variable.
-    validate_shape: (Optional) Whether shape validation is enabled for
-      the created variable.
-    name: (Optional) String name of the created variable.
-  Returns:
-    A (non-trainable) variable initialized to zero, or if inside a
-    `DistributionStrategy` scope a replica-local variable container.
-  """
-  # Note that synchronization "ON_READ" implies trainable=False.
-  return tf.Variable(
-      lambda: tf.zeros(shape, dtype),
-      collections=[
-          tf.GraphKeys.LOCAL_VARIABLES, tf.GraphKeys.METRIC_VARIABLES
-      ],
-      validate_shape=validate_shape,
-      synchronization=tf.VariableSynchronization.ON_READ,
-      aggregation=tf.VariableAggregation.SUM,
-      name=name)
-
-
-def tp_fn_fp(labels, predictions, seq_length, metric_fn, metrics_collections=None, updates_collections=None):
-    """Metric returning true positives, false negatives and false positives for
-        sequence predictions.
+    Follows the metric outlined by Kyritsis et al. (2019) in
+        Modeling wrist micromovements to measure in-meal eating behavior from
+        inertial sensor data
+        https://ieeexplore.ieee.org/abstract/document/8606156/
 
     Args:
-        labels: The labels
-        predictions: The predictions
+        labels: The truth, where 1 means part of the sequence and 0 otherwise.
+            [batch_size, seq_length]
+        predictions: The predictions, where 1 means part of the sequence and 0
+            otherwise. [batch_size, seq_length]
+        def_val: The default value for non-events
         seq_length: The sequence length.
-        metric_fn: Function calculating tp, fn, fp.
-        metrics_collections:
-        updates_collections:
+
+    Returns:
+        tp: True positives (number of true sequences of 1s predicted with at
+                least one predicting 1)
+        fn: False negatives (number of true sequences of 1s not matched by at
+                least one predicting 1)
+        fp: False positives (number of excess predicting 1s matching a true
+                sequence of 1s in excess + number of predicting 1s not matching
+                a true sequence of 1s)
     """
-    with tf.variable_scope('tp_fn_fp', (labels, predictions)):
+    def sequence_masks(labels, def_val, seq_length):
+        """Generate masks [batch, max_seq_count, seq_length] of all event sequences"""
+        # Get dimensions
+        batch_size = labels.get_shape()[0]
 
-        total_tp = _metric_variable([], tf.float32, name='total_tp')
-        total_fn = _metric_variable([], tf.float32, name='total_fn')
-        total_fp = _metric_variable([], tf.float32, name='total_fp')
+        # Mask elements non-equal to previous elements
+        diff_mask = tf.not_equal(labels[:, 1:], labels[:, :-1])
+        prev_mask = tf.concat([tf.ones_like(labels[:, :1], tf.bool), diff_mask], axis=1)
+        next_mask = tf.concat([diff_mask, tf.ones_like(labels[:, :1], tf.bool)], axis=1)
 
-        tp_tensor = _aggregate_variable(total_tp, metrics_collections)
-        fn_tensor = _aggregate_variable(total_fn, metrics_collections)
-        fp_tensor = _aggregate_variable(total_fp, metrics_collections)
+        # Mask elements that are not def_val
+        not_default_mask = tf.not_equal(labels, tf.fill(tf.shape(labels), def_val))
 
-        tp, fn, fp = metric_fn(labels, predictions, 0, seq_length)
+        # Test if there are no sequences
+        empty = tf.equal(tf.reduce_sum(tf.cast(not_default_mask, tf.int32)), 0)
 
-        tp_update_op = tf.assign_add(total_tp, tp)
-        fn_update_op = tf.assign_add(total_fn, fn)
-        fp_update_op = tf.assign_add(total_fp, fp)
+        # Mask sequence starts and ends
+        seq_start_mask = tf.logical_and(prev_mask, not_default_mask)
+        seq_end_mask = tf.logical_and(next_mask, not_default_mask)
 
-        if updates_collections:
-            tf.add_to_collections(updates_collections, tp_update_op)
-            tf.add_to_collections(updates_collections, fn_update_op)
-            tf.add_to_collections(updates_collections, fp_update_op)
+        # Scatter seq_val
+        seq_count_per_batch = tf.reduce_sum(tf.cast(seq_start_mask, tf.int32), axis=[1])
+        max_seq_count = tf.reduce_max(seq_count_per_batch)
+        seq_val_idx_mask = tf.reshape(tf.sequence_mask(seq_count_per_batch, maxlen=max_seq_count), [-1])
+        seq_val_idx = tf.boolean_mask(tf.range(tf.size(seq_val_idx_mask)), seq_val_idx_mask)
+        seq_vals = tf.boolean_mask(labels, seq_start_mask)
+        seq_val = tf.scatter_nd(
+            indices=tf.expand_dims(seq_val_idx, axis=1),
+            updates=seq_vals,
+            shape=tf.shape(seq_val_idx_mask))
+        seq_val = tf.reshape(seq_val, [batch_size, max_seq_count])
 
-    return tp_tensor, fn_tensor, fp_tensor, tp_update_op, fn_update_op, fp_update_op
+        # Scatter seq_start
+        seq_start_idx = tf.where(seq_start_mask)[:,1]
+        seq_start = tf.scatter_nd(
+            indices=tf.expand_dims(seq_val_idx, axis=1),
+            updates=seq_start_idx,
+            shape=tf.shape(seq_val_idx_mask))
+        seq_start = tf.reshape(seq_start, [batch_size, max_seq_count])
 
+        # Scatter seq_end
+        seq_end_idx = tf.where(seq_end_mask)[:,1]
+        seq_end = tf.scatter_nd(
+            indices=tf.expand_dims(seq_val_idx, axis=1),
+            updates=seq_end_idx,
+            shape=tf.shape(seq_val_idx_mask))
+        seq_end = tf.reshape(seq_end, [batch_size, max_seq_count])
 
-def pre_rec(labels, predictions, seq_length, metric_fn, metrics_collections=None, updates_collections=None):
-    """Metric returning precision and recall for sequence predictions.
+        def batch_seq_masks(starts, ends, length, vals, def_val):
+            def seq_mask(start, end, length, val, def_val):
+                return tf.concat([
+                    tf.fill([start], def_val),
+                    tf.fill([end-start+1], val),
+                    tf.fill([length-end-1], def_val)], axis=0)
+            return tf.map_fn(
+                fn=lambda x: seq_mask(x[0], x[1], length, x[2], def_val),
+                elems=(starts, ends, vals),
+                dtype=tf.int32)
 
-    Args:
-        labels: The labels
-        predictions: The predictions
-        seq_length: The sequence length.
-        metric_fn: Function calculating the underlying tp, fn, fp for each
-            batch element.
-        metrics_collections:
-        updates_collections:
-    """
-    with tf.variable_scope('pre_rec', (labels, predictions)):
+        seq_masks = tf.cond(empty,
+            lambda: tf.fill([batch_size, 0, seq_length], def_val),
+            lambda: tf.map_fn(
+                fn=lambda x: batch_seq_masks(x[0], x[1], seq_length, x[2], def_val),
+                elems=(seq_start, seq_end, seq_val),
+                dtype=tf.int32))
 
-        tp, fn, fp, tp_update_op, fn_update_op, fp_update_op = tp_fn_fp(
-            labels, predictions, seq_length, metric_fn,
-            metrics_collections=None, updates_collections=None)
+        return seq_masks, max_seq_count
 
-        def compute_precision(tp, fp, name):
-            return tf.where(
-                tf.greater(tp + fp, 0), tf.divide(tp, tp + fp), 0, name)
-        def compute_recall(tp, fn, name):
-            return tf.where(
-                tf.greater(tp + fn, 0), tf.divide(tp, tp + fn), 0, name)
+    # Dimensions
+    batch_size = labels.get_shape()[0]
 
-        if tf.__version__ < "1.13.1":
-            pre = _aggregate_across_towers(
-                metrics_collections, lambda _, tp, fp: compute_precision(tp, fp, 'value'), tp, fp)
-            rec = _aggregate_across_towers(
-                metrics_collections, lambda _, tp, fn: compute_recall(tp, fn, 'value'), tp, fn)
-        else:
-            pre = _aggregate_across_replicas(
-                metrics_collections, lambda _, tp, fp: compute_precision(tp, fp, 'value'), tp, fp)
-            rec = _aggregate_across_replicas(
-                metrics_collections, lambda _, tp, fn: compute_recall(tp, fn, 'value'), tp, fn)
+    # Mask of negative ground truth
+    neg_mask = tf.equal(labels, def_val)
 
-        pre_update_op = compute_precision(tp_update_op, fp_update_op, 'update_op')
-        rec_update_op = compute_recall(tp_update_op, fn_update_op, 'update_op')
+    # Compute whether labels are empty (no sequences)
+    pos_length = tf.reduce_sum(labels)
+    empty = tf.cond(tf.equal(pos_length, 0), lambda: True, lambda: False)
 
-        if updates_collections:
-            tf.add_to_collections(updates_collections, pre_update_op)
-            tf.add_to_collections(updates_collections, rec_update_op)
+    # Derive positive ground truth mask reshape to [n_gt_seq, seq_length]
+    pos_mask, max_seq_count = sequence_masks(labels, def_val, seq_length)
+    pos_mask = tf.reshape(pos_mask, [-1, seq_length])
 
-        return pre, rec, pre_update_op, rec_update_op
+    # Stack predictions accordingly
+    pred_stacked = tf.reshape(tf.tile(tf.expand_dims(predictions, axis=1), [1, max_seq_count, 1]), [-1, seq_length])
 
+    # Remove empty masks
+    empty_mask = tf.greater(tf.reduce_sum(pos_mask, axis=1), 0)
 
-def f1_metric(labels, predictions, seq_length, metric_fn, metrics_collections=None, updates_collections=None):
-    """Metric returning f1 for sequence predictions.
+    pos_mask = tf.cond(empty,
+        lambda: pos_mask,
+        lambda: tf.boolean_mask(pos_mask, empty_mask))
+    pred_stacked = tf.cond(empty,
+        lambda: pred_stacked,
+        lambda: tf.boolean_mask(pred_stacked, empty_mask))
 
-    Args:
-        labels: The labels
-        predictions: The predictions
-        seq_length: The sequence length.
-        metric_fn: Function calculating the underlying tp, fn, fp for each
-            batch element.
-        metrics_collections:
-        updates_collections:
-    """
-    with tf.variable_scope('f1', (labels, predictions)):
+    # Calculate number of predictions for pos sequences
+    pred_sums = tf.map_fn(
+        fn=lambda x: tf.reduce_sum(tf.boolean_mask(x[0], x[1])),
+        elems=(pred_stacked, pos_mask), dtype=tf.int32)
 
-        pre, rec, pre_update_op, rec_update_op = pre_rec(
-            labels, predictions, seq_length, metric_fn,
-            metrics_collections=None, updates_collections=None)
+    # Calculate true positive, false positive and false negative count
+    tp = tf.reduce_sum(tf.map_fn(lambda count: tf.cond(count > 0, lambda: 1, lambda: 0), pred_sums))
+    fn = tf.reduce_sum(tf.map_fn(lambda count: tf.cond(count > 0, lambda: 0, lambda: 1), pred_sums))
+    fp = tf.cond(empty,
+        lambda: 0,
+        lambda: tf.reduce_sum(tf.map_fn(lambda count: tf.cond(count > 1, lambda: count-1, lambda: 0), pred_sums)))
+    fp += tf.reduce_sum(tf.boolean_mask(predictions, mask=neg_mask))
 
-        def compute_f1(pre, rec, name):
-            return tf.where(
-                tf.greater(pre + rec, 0), tf.divide(2 * pre * rec, pre + rec), 0, name)
+    tp = tf.cast(tp, tf.float32)
+    fn = tf.cast(fn, tf.float32)
+    fp = tf.cast(fp, tf.float32)
 
-        if tf.__version__ < "1.13.1":
-            f1 = _aggregate_across_towers(
-                metrics_collections, lambda _, pre, rec: compute_f1(pre, rec, 'value'), pre, rec)
-        else:
-            f1 = _aggregate_across_replicas(
-                metrics_collections, lambda _, pre, rec: compute_f1(pre, rec, 'value'), pre, rec)
+    return tp, fn, fp
 
-        f1_update_op = compute_f1(pre_update_op, rec_update_op, 'update_op')
+class Precision(tf.keras.metrics.Metric):
+    def __init__(self, def_val, seq_length, name=None, dtype=None):
+        super(Precision, self).__init__(name=name, dtype=dtype)
+        self.seq_length = seq_length
+        self.def_val = def_val
+        self.total_tp = self.add_weight('total_tp',
+            shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
+        self.total_fp = self.add_weight('total_fp',
+            shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
 
-        if updates_collections:
-            tf.add_to_collections(updates_collections, f1_update_op)
+    def update_state(self, y_true, y_pred):
+        tp, _, fp = evaluate_interval_detection(
+            labels=y_true, predictions=y_pred,
+            def_val=self.def_val, seq_length=self.seq_length)
+        self.total_tp.assign_add(tp)
+        self.total_fp.assign_add(fp)
 
-        return f1, f1_update_op
+    def result(self):
+        return tf.math.divide_no_nan(
+            self.total_tp,
+            self.total_tp + self.total_fp)
+
+    def reset_states(self):
+        self.total_tp.assign(0)
+        self.total_fp.assign(0)
+
+class Recall(tf.keras.metrics.Metric):
+    def __init__(self, def_val, seq_length, name=None, dtype=None):
+        super(Recall, self).__init__(name=name, dtype=dtype)
+        self.seq_length = seq_length
+        self.def_val = def_val
+        self.total_tp = self.add_weight('total_tp',
+            shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
+        self.total_fn = self.add_weight('total_fn',
+            shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
+
+    def update_state(self, y_true, y_pred):
+        tp, fn, _ = evaluate_interval_detection(
+            labels=y_true, predictions=y_pred,
+            def_val=self.def_val, seq_length=self.seq_length)
+        self.total_tp.assign_add(tp)
+        self.total_fn.assign_add(fn)
+
+    def result(self):
+        return tf.math.divide_no_nan(
+            self.total_tp,
+            self.total_tp + self.total_fn)
+
+    def reset_states(self):
+        self.total_tp.assign(0)
+        self.total_fn.assign(0)
+
+class F1(tf.keras.metrics.Metric):
+    def __init__(self, def_val, seq_length, name=None, dtype=None):
+        super(F1, self).__init__(name=name, dtype=dtype)
+        self.seq_length = seq_length
+        self.def_val = def_val
+        self.total_tp = self.add_weight('total_tp',
+            shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
+        self.total_fn = self.add_weight('total_fn',
+            shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
+        self.total_fp = self.add_weight('total_fp',
+            shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
+
+    def update_state(self, y_true, y_pred):
+        tp, fn, fp = evaluate_interval_detection(
+            labels=y_true, predictions=y_pred,
+            def_val=self.def_val, seq_length=self.seq_length)
+        self.total_tp.assign_add(tp)
+        self.total_fn.assign_add(fn)
+        self.total_fp.assign_add(fp)
+
+    def result(self):
+        pre = tf.math.divide_no_nan(
+            self.total_tp,
+            self.total_tp + self.total_fp)
+        rec = tf.math.divide_no_nan(
+            self.total_tp,
+            self.total_tp + self.total_fn)
+        return tf.where(tf.greater(self.total_tp, 0),
+                tf.divide(
+                    2 * pre * rec,
+                    pre + rec),
+                0)
+
+    def reset_states(self):
+        self.total_tp.assign(0)
+        self.total_fn.assign(0)
+        self.total_fp.assign(0)

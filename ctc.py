@@ -2,7 +2,6 @@
 
 import tensorflow as tf
 
-
 def _collapse_sequences(labels, seq_length, def_val=1, pad_val=0, replace_with_idle=True, pos='middle'):
     """Collapse sequences of labels, optionally replacing with default value
 
@@ -72,7 +71,7 @@ def _collapse_sequences(labels, seq_length, def_val=1, pad_val=0, replace_with_i
         # For each sequence of seq_val, find the index to collapse to
         def collapse_seq_idx(start, end, pos='middle'):
             if pos == 'middle':
-                return tf.floordiv(end + start, 2)
+                return tf.math.floordiv(end + start, 2)
             elif pos == 'start':
                 return start
             elif pos == 'end':
@@ -131,7 +130,6 @@ def _collapse_sequences(labels, seq_length, def_val=1, pad_val=0, replace_with_i
 
     return result, seq_length
 
-
 def greedy_decode_with_indices(inputs, num_classes, seq_length, pos='middle'):
     """Naive inference by retrieving most likely output at each time-step.
 
@@ -160,136 +158,3 @@ def greedy_decode_with_indices(inputs, num_classes, seq_length, pos='middle'):
     one_indices = tf.where(tf.equal(collapsed, tf.constant(1, tf.int32)))
 
     return collapsed, one_indices
-
-
-def evaluate_interval_detection(labels, predictions, def_val, seq_length):
-    """Evaluate interval detection for sequences by calculating
-        tp, fp, and fn.
-
-    Follows the metric outlined by Kyritsis et al. (2019) in
-        Modeling wrist micromovements to measure in-meal eating behavior from
-        inertial sensor data
-        https://ieeexplore.ieee.org/abstract/document/8606156/
-
-    Args:
-        labels: The truth, where 1 means part of the sequence and 0 otherwise.
-            [batch_size, seq_length]
-        predictions: The predictions, where 1 means part of the sequence and 0
-            otherwise. [batch_size, seq_length]
-        seq_length: The sequence length.
-
-    Returns:
-        tp: True positives (number of true sequences of 1s predicted with at
-                least one predicting 1)
-        fn: False negatives (number of true sequences of 1s not matched by at
-                least one predicting 1)
-        fp: False positives (number of excess predicting 1s matching a true
-                sequence of 1s in excess + number of predicting 1s not matching
-                a true sequence of 1s)
-    """
-    def sequence_masks(labels, def_val, seq_length):
-        # Get dimensions
-        batch_size = labels.get_shape()[0]
-
-        # Mask elements non-equal to previous elements
-        diff_mask = tf.not_equal(labels[:, 1:], labels[:, :-1])
-        prev_mask = tf.concat([tf.ones_like(labels[:, :1], tf.bool), diff_mask], axis=1)
-        next_mask = tf.concat([diff_mask, tf.ones_like(labels[:, :1], tf.bool)], axis=1)
-
-        # Mask elements that are not def_val
-        not_default_mask = tf.not_equal(labels, tf.fill(tf.shape(labels), def_val))
-
-        # Test if there are no sequences
-        empty = tf.equal(tf.reduce_sum(tf.cast(not_default_mask, tf.int32)), 0)
-
-        # Mask sequence starts and ends
-        seq_start_mask = tf.logical_and(prev_mask, not_default_mask)
-        seq_end_mask = tf.logical_and(next_mask, not_default_mask)
-
-        # Scatter seq_val
-        seq_count_per_batch = tf.reduce_sum(tf.cast(seq_start_mask, tf.int32), axis=[1])
-        max_seq_count = tf.reduce_max(seq_count_per_batch)
-        seq_val_idx_mask = tf.reshape(tf.sequence_mask(seq_count_per_batch, maxlen=max_seq_count), [-1])
-        seq_val_idx = tf.boolean_mask(tf.range(tf.size(seq_val_idx_mask)), seq_val_idx_mask)
-        seq_vals = tf.boolean_mask(labels, seq_start_mask)
-        seq_val = tf.scatter_nd(
-            indices=tf.expand_dims(seq_val_idx, axis=1),
-            updates=seq_vals,
-            shape=tf.shape(seq_val_idx_mask))
-        seq_val = tf.reshape(seq_val, [batch_size, max_seq_count])
-
-        # Scatter seq_start
-        seq_start_idx = tf.where(seq_start_mask)[:,1]
-        seq_start = tf.scatter_nd(
-            indices=tf.expand_dims(seq_val_idx, axis=1),
-            updates=seq_start_idx,
-            shape=tf.shape(seq_val_idx_mask))
-        seq_start = tf.reshape(seq_start, [batch_size, max_seq_count])
-
-        # Scatter seq_end
-        seq_end_idx = tf.where(seq_end_mask)[:,1]
-        seq_end = tf.scatter_nd(
-            indices=tf.expand_dims(seq_val_idx, axis=1),
-            updates=seq_end_idx,
-            shape=tf.shape(seq_val_idx_mask))
-        seq_end = tf.reshape(seq_end, [batch_size, max_seq_count])
-
-        def batch_seq_masks(starts, ends, length, vals, def_val):
-            def seq_mask(start, end, length, val, def_val):
-                return tf.concat([
-                    tf.fill([start], def_val),
-                    tf.fill([end-start+1], val),
-                    tf.fill([length-end-1], def_val)], axis=0)
-            return tf.map_fn(
-                fn=lambda x: seq_mask(x[0], x[1], length, x[2], def_val),
-                elems=(starts, ends, vals),
-                dtype=tf.int32)
-
-        seq_masks = tf.cond(empty,
-            lambda: tf.fill([batch_size, 1, seq_length], def_val),
-            lambda: tf.map_fn(
-                fn=lambda x: batch_seq_masks(x[0], x[1], seq_length, x[2], def_val),
-                elems=(seq_start, seq_end, seq_val),
-                dtype=tf.int32))
-
-        return seq_masks, max_seq_count
-
-    # Dimensions
-    batch_size = labels.get_shape()[0]
-
-    # Mask of negative ground truth
-    neg_mask = tf.equal(labels, def_val)
-
-    # Compute whether labels are empty (no sequences)
-    pos_length = tf.reduce_sum(labels)
-    empty = tf.cond(tf.equal(pos_length, 0), lambda: True, lambda: False)
-
-    # Derive positive ground truth mask and stack predictions accordingly
-    test = sequence_masks(labels, 0, seq_length)
-    pos_mask, max_seq_count = sequence_masks(labels, 0, seq_length)
-    pos_mask = tf.reshape(pos_mask, [-1, seq_length])
-    pred_stacked = tf.reshape(tf.tile(tf.expand_dims(predictions, axis=1), [1, max_seq_count, 1]), [-1, seq_length])
-
-    # Remove empty masks
-    empty_mask = tf.greater(tf.reduce_sum(pos_mask, axis=1), 0)
-    pos_mask = tf.boolean_mask(pos_mask, empty_mask)
-    pred_stacked = tf.boolean_mask(pred_stacked, empty_mask)
-
-    # Calculate number of predictions for pos sequences
-    pred_sums = tf.map_fn(
-        fn=lambda x: tf.reduce_sum(tf.boolean_mask(x[0], x[1])),
-        elems=(pred_stacked, pos_mask), dtype=tf.int32)
-
-    # Calculate true positive, false positive and false negative count
-    tp = tf.reduce_sum(tf.map_fn(lambda count: tf.cond(count > 0, lambda: 1, lambda: 0), pred_sums))
-    fn = tf.reduce_sum(tf.map_fn(lambda count: tf.cond(count > 0, lambda: 0, lambda: 1), pred_sums))
-    fp = tf.cond(empty,
-        lambda: 0,
-        lambda: tf.reduce_sum(tf.map_fn(lambda count: tf.cond(count > 1, lambda: count-1, lambda: 0), pred_sums)))
-    fp += tf.reduce_sum(tf.boolean_mask(predictions, mask=neg_mask))
-
-    tp = tf.cast(tp, tf.float32)
-    fn = tf.cast(fn, tf.float32)
-    fp = tf.cast(fp, tf.float32)
-
-    return tp, fn, fp
