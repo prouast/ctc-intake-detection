@@ -90,6 +90,10 @@ def run_experiment(arg=None):
     train_f1_metric = metrics.F1(
         def_val=0, seq_length=int(FLAGS.seq_length / FLAGS.seq_pool))
 
+    # Set up log writer
+    train_writer = tf.summary.create_file_writer("log/train")
+    #eval_writer = tf.summary.create_file_writer("log/eval")
+
     # Iterate over epochs
     for epoch in range(FLAGS.train_epochs):
         logging.info('Starting epoch %d' % (epoch,))
@@ -160,6 +164,12 @@ def run_experiment(arg=None):
                 logging.info('Training precision: %s' % (float(train_pre),))
                 logging.info('Training recall: %s' % (float(train_rec),))
                 logging.info('Training f1: %s' % (float(train_f1),))
+                with train_writer.as_default():
+                    tf.summary.scalar('metrics/precision', data=train_pre, step=step)
+                    tf.summary.scalar('metrics/recall', data=train_rec, step=step)
+                    tf.summary.scalar('metrics/f1', data=train_f1, step=step)
+                    tf.summary.scalar('training/loss', data=loss, step=step)
+                    train_writer.flush()
 
         # Display metrics at the end of each epoch.
         train_pre = train_pre_metric.result()
@@ -173,6 +183,15 @@ def run_experiment(arg=None):
         train_pre_metric.reset_states()
         train_rec_metric.reset_states()
         train_f1_metric.reset_states()
+
+        # Evaluation
+        #with eval_writer.as_default():
+            #tf.summary.scalar('metrics/precision', data=train_pre, step=step)
+            #tf.summary.scalar('metrics/recall', data=train_rec, step=step)
+            #tf.summary.scalar('metrics/f1', data=train_f1, step=step)
+            #tf.summary.scalar('training/loss', data=loss, step=step)
+
+        writer.flush()
 
 def dataset(is_training, data_dir):
     """Input pipeline"""
