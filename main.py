@@ -1,5 +1,6 @@
 import math
 import os
+import numpy as np
 from absl import app
 from absl import flags
 from absl import logging
@@ -27,6 +28,8 @@ flags.DEFINE_integer(
     name='batch_size', default=16, help='Batch size used for training.')
 flags.DEFINE_string(
     name='eval_dir', default='data/raw/eval', help='Directory for val data.')
+flags.DEFINE_integer(
+    name='eval_steps', default=250, help='Eval after every x steps.')
 flags.DEFINE_enum(
     name='input_mode', default="video_raw", enum_values=["video_raw", "inert", "video_fc7"],
     help='What is the input mode')
@@ -36,6 +39,8 @@ flags.DEFINE_integer(
     name='input_fps', default=8, help='Number of input frames per second.')
 flags.DEFINE_float(
     name='l2_lambda', default=1e-3, help='l2 regularization lambda.')
+flags.DEFINE_integer(
+    name='log_steps', default=100, help='Log after every x steps.')
 flags.DEFINE_float(
     name='lr_base', default=1e-3, help='Base learning rate.')
 flags.DEFINE_enum(
@@ -83,16 +88,20 @@ def run_experiment(arg=None):
     eval_dataset = dataset(is_training=False, data_dir=FLAGS.eval_dir)
 
     # Instantiate the metrics
-    train_pre_metric = metrics.Precision(
-        def_val=0, seq_length=int(FLAGS.seq_length / FLAGS.seq_pool))
-    train_rec_metric = metrics.Recall(
-        def_val=0, seq_length=int(FLAGS.seq_length / FLAGS.seq_pool))
-    train_f1_metric = metrics.F1(
-        def_val=0, seq_length=int(FLAGS.seq_length / FLAGS.seq_pool))
+    seq_length = int(FLAGS.seq_length / FLAGS.seq_pool)
+    train_pre_metric = metrics.Precision(def_val=0, seq_length=seq_length)
+    train_rec_metric = metrics.Recall(def_val=0, seq_length=seq_length)
+    train_f1_metric = metrics.F1(def_val=0, seq_length=seq_length)
+    eval_pre_metric = metrics.Precision(def_val=0, seq_length=seq_length)
+    eval_rec_metric = metrics.Recall(def_val=0, seq_length=seq_length)
+    eval_f1_metric = metrics.F1(def_val=0, seq_length=seq_length)
 
     # Set up log writer
     train_writer = tf.summary.create_file_writer("log/train")
-    #eval_writer = tf.summary.create_file_writer("log/eval")
+    eval_writer = tf.summary.create_file_writer("log/eval")
+
+    # Keep track of total global step
+    global_step = 0
 
     # Iterate over epochs
     for epoch in range(FLAGS.train_epochs):
@@ -101,29 +110,15 @@ def run_experiment(arg=None):
         # Iterate over batches
         for step, (features, labels) in enumerate(train_dataset):
 
-            # If seq_pool performed, adjust seq_length and labels
-            if FLAGS.seq_pool > 1:
-                seq_length = int(FLAGS.seq_length / FLAGS.seq_pool)
-                labels = tf.strided_slice(input_=labels,
-                    begin=[0, FLAGS.seq_pool-1],
-                    end=[FLAGS.batch_size, FLAGS.seq_length],
-                    strides=[1, FLAGS.seq_pool])
-            else:
-                seq_length = FLAGS.seq_length
-            labels = tf.reshape(labels, [FLAGS.batch_size, seq_length])
+            # Adjust seq_length and labels
+            labels = adjust_labels(labels, FLAGS.seq_pool, FLAGS.seq_length,
+                FLAGS.batch_size)
 
             # Open a GradientTape to record the operations run during forward pass
             with tf.GradientTape() as tape:
 
                 # Run the forward pass
                 logits = model(features)
-
-                def dense_to_sparse(input, eos_token=0):
-                    idx = tf.where(tf.not_equal(input, tf.constant(eos_token, input.dtype)))
-                    values = tf.gather_nd(input, idx)
-                    shape = tf.shape(input, out_type=tf.int64)
-                    sparse = tf.SparseTensor(idx, values, shape)
-                    return sparse
 
                 # Calculate ctc loss from SparseTensor without collapsing labels
                 seq_lengths = tf.fill([FLAGS.batch_size], seq_length)
@@ -137,7 +132,6 @@ def run_experiment(arg=None):
 
                 # Reduce loss to scalar
                 loss = tf.reduce_mean(loss)
-                loss += sum(model.losses)
 
             # Retrieve gradient with gradient tape
             grads = tape.gradient(loss, model.trainable_weights)
@@ -157,19 +151,79 @@ def run_experiment(arg=None):
             train_rec = train_rec_metric.result()
             train_f1 = train_f1_metric.result()
 
-            # Log every 200 batches.
-            if step % 50 == 0:
-                logging.info('Training loss (for one batch) at step %s: %s' % (step, float(loss)))
-                logging.info('Seen so far: %s samples' % ((step + 1) * FLAGS.batch_size))
-                logging.info('Training precision: %s' % (float(train_pre),))
-                logging.info('Training recall: %s' % (float(train_rec),))
-                logging.info('Training f1: %s' % (float(train_f1),))
+            # Log every x batches.
+            if global_step % FLAGS.log_steps == 0:
+                logging.info('Step %s in epoch %s; global step %s' % (step, epoch, global_step))
+                logging.info('Seen this epoch: %s samples' % ((step + 1) * FLAGS.batch_size))
+                logging.info('Training loss (this step): %s' % float(loss))
+                logging.info('Training precision (this epoch): %s' % (float(train_pre),))
+                logging.info('Training recall (this epoch): %s' % (float(train_rec),))
+                logging.info('Training f1 (this epoch): %s' % (float(train_f1),))
                 with train_writer.as_default():
-                    tf.summary.scalar('metrics/precision', data=train_pre, step=step)
-                    tf.summary.scalar('metrics/recall', data=train_rec, step=step)
-                    tf.summary.scalar('metrics/f1', data=train_f1, step=step)
-                    tf.summary.scalar('training/loss', data=loss, step=step)
+                    tf.summary.scalar('metrics/precision', data=train_pre, step=global_step)
+                    tf.summary.scalar('metrics/recall', data=train_rec, step=global_step)
+                    tf.summary.scalar('metrics/f1', data=train_f1, step=global_step)
+                    tf.summary.scalar('training/loss', data=loss, step=global_step)
                     train_writer.flush()
+
+            # Evaluate every FLAGS.eval_steps batches.
+            if global_step % FLAGS.eval_steps == 0:
+                logging.info('Evaluating at global step %s' % global_step)
+
+                eval_losses = []
+                for i, (eval_features, eval_labels) in enumerate(eval_dataset):
+
+                    # Adjust seq_length and labels
+                    eval_labels = adjust_labels(eval_labels, FLAGS.seq_pool,
+                        FLAGS.seq_length, FLAGS.batch_size)
+
+                    # Run the forward pass
+                    eval_logits = model(eval_features)
+
+                    # Calculate ctc loss from SparseTensor without collapsing labels
+                    seq_lengths = tf.fill([FLAGS.batch_size], seq_length)
+                    eval_loss = tf.compat.v1.nn.ctc_loss(
+                        labels=dense_to_sparse(eval_labels, eos_token=-1),
+                        inputs=eval_logits,
+                        sequence_length=seq_lengths,
+                        preprocess_collapse_repeated=True,
+                        ctc_merge_repeated=False,
+                        time_major=False)
+
+                    # Reduce loss to scalar
+                    eval_loss = tf.reduce_mean(eval_loss)
+                    eval_losses.append(eval_loss.numpy())
+
+                    # Decode logits into predictions
+                    eval_predictions, _ = greedy_decode_with_indices(
+                        eval_logits, NUM_CLASSES, seq_length)
+
+                    # Calculate metric
+                    eval_pre_metric(eval_labels, eval_predictions)
+                    eval_rec_metric(eval_labels, eval_predictions)
+                    eval_f1_metric(eval_labels, eval_predictions)
+
+                eval_pre = eval_pre_metric.result()
+                eval_rec = eval_rec_metric.result()
+                eval_f1 = eval_f1_metric.result()
+                eval_loss = np.mean(eval_losses)
+
+                logging.info('Evaluation loss: %s' % float(eval_loss))
+                logging.info('Evaluation precision: %s' % (float(eval_pre),))
+                logging.info('Evaluation recall: %s' % (float(eval_rec),))
+                logging.info('Evaluation f1: %s' % (float(eval_f1),))
+                with eval_writer.as_default():
+                    tf.summary.scalar('metrics/precision', data=eval_pre, step=global_step)
+                    tf.summary.scalar('metrics/recall', data=eval_rec, step=global_step)
+                    tf.summary.scalar('metrics/f1', data=eval_f1, step=global_step)
+                    tf.summary.scalar('training/loss', data=eval_loss, step=global_step)
+                    eval_pre_metric.reset_states()
+                    eval_rec_metric.reset_states()
+                    eval_f1_metric.reset_states()
+                    eval_writer.flush()
+
+            # Increment global step
+            global_step += 1
 
         # Display metrics at the end of each epoch.
         train_pre = train_pre_metric.result()
@@ -183,15 +237,23 @@ def run_experiment(arg=None):
         train_pre_metric.reset_states()
         train_rec_metric.reset_states()
         train_f1_metric.reset_states()
+        train_writer.flush()
 
-        # Evaluation
-        #with eval_writer.as_default():
-            #tf.summary.scalar('metrics/precision', data=train_pre, step=step)
-            #tf.summary.scalar('metrics/recall', data=train_rec, step=step)
-            #tf.summary.scalar('metrics/f1', data=train_f1, step=step)
-            #tf.summary.scalar('training/loss', data=loss, step=step)
+def dense_to_sparse(input, eos_token=0):
+    idx = tf.where(tf.not_equal(input, tf.constant(eos_token, input.dtype)))
+    values = tf.gather_nd(input, idx)
+    shape = tf.shape(input, out_type=tf.int64)
+    sparse = tf.SparseTensor(idx, values, shape)
+    return sparse
 
-        writer.flush()
+def adjust_labels(labels, seq_pool, seq_length, batch_size):
+    """If seq_pool performed, adjust seq_length and labels"""
+    if seq_pool > 1:
+        labels = tf.strided_slice(
+            input_=labels, begin=[0, seq_pool-1], end=[batch_size, seq_length],
+            strides=[1, seq_pool])
+    labels = tf.reshape(labels, [batch_size, int(seq_length/seq_pool)])
+    return labels
 
 def dataset(is_training, data_dir):
     """Input pipeline"""
