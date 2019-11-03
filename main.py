@@ -8,6 +8,7 @@ import tensorflow as tf
 from tensorflow.python.platform import gfile
 from tensorflow import keras
 from ctc import greedy_decode_with_indices
+from model_saver import ModelSaver
 import metrics
 import video_small_cnn_lstm
 import inert_small_cnn_lstm
@@ -20,7 +21,7 @@ LR_VALUES = [1e-3, 1e-4, 1e-5, 1e-6]
 NUM_CHANNELS = 3
 NUM_CLASSES = 2
 NUM_SHARDS = 20
-NUM_SHUFFLE = 10000
+NUM_SHUFFLE = 50000
 ORIGINAL_SIZE = 140
 
 FLAGS = flags.FLAGS
@@ -97,8 +98,12 @@ def run_experiment(arg=None):
     eval_f1_metric = metrics.F1(def_val=0, seq_length=seq_length)
 
     # Set up log writer
-    train_writer = tf.summary.create_file_writer("log/train")
-    eval_writer = tf.summary.create_file_writer("log/eval")
+    train_writer = tf.summary.create_file_writer(os.path.join(FLAGS.model_dir, "log/train"))
+    eval_writer = tf.summary.create_file_writer(os.path.join(FLAGS.model_dir, "log/eval"))
+
+    # Save best checkpoints in terms of f1
+    model_saver = ModelSaver(os.path.join(FLAGS.model_dir, "checkpoints"),
+        compare_fn=lambda x,y: x.score > y.score, sort_reverse=True)
 
     # Keep track of total global step
     global_step = 0
@@ -107,7 +112,7 @@ def run_experiment(arg=None):
     for epoch in range(FLAGS.train_epochs):
         logging.info('Starting epoch %d' % (epoch,))
 
-        # Iterate over batches
+        # Iterate over training batches
         for step, (features, labels) in enumerate(train_dataset):
 
             # Adjust seq_length and labels
@@ -151,7 +156,7 @@ def run_experiment(arg=None):
             train_rec = train_rec_metric.result()
             train_f1 = train_f1_metric.result()
 
-            # Log every x batches.
+            # Log every FLAGS.log_steps steps.
             if global_step % FLAGS.log_steps == 0:
                 logging.info('Step %s in epoch %s; global step %s' % (step, epoch, global_step))
                 logging.info('Seen this epoch: %s samples' % ((step + 1) * FLAGS.batch_size))
@@ -166,7 +171,7 @@ def run_experiment(arg=None):
                     tf.summary.scalar('training/loss', data=loss, step=global_step)
                     train_writer.flush()
 
-            # Evaluate every FLAGS.eval_steps batches.
+            # Evaluate every FLAGS.eval_steps steps.
             if global_step % FLAGS.eval_steps == 0:
                 logging.info('Evaluating at global step %s' % global_step)
 
@@ -222,16 +227,15 @@ def run_experiment(arg=None):
                     eval_f1_metric.reset_states()
                     eval_writer.flush()
 
+                # Save best models
+                model_saver.save(model=model, score=eval_f1.numpy(),
+                    step=global_step, file="model")
+
             # Increment global step
             global_step += 1
 
         # Display metrics at the end of each epoch.
-        train_pre = train_pre_metric.result()
-        logging.info('Training precision over epoch: %s' % (float(train_pre),))
-        train_rec = train_rec_metric.result()
-        logging.info('Training recall over epoch: %s' % (float(train_rec),))
-        train_f1 = train_f1_metric.result()
-        logging.info('Training f1 over epoch: %s' % (float(train_f1),))
+        logging.info('Finished epoch %s' % (epoch,))
 
         # Reset training metrics at the end of each epoch
         train_pre_metric.reset_states()
@@ -351,7 +355,7 @@ def _get_transformation_parser(is_training):
     """Return the data transformation parser."""
 
     def transformation_parser(image_data, label_data):
-        """Apply distortions to sequences."""
+        """Apply distortions to image sequences."""
 
         if is_training:
 
