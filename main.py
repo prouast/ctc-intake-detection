@@ -18,6 +18,8 @@ FRAME_SIZE = 128
 GRADIENT_CLIPPING_NORM = 10.0
 LR_BOUNDARIES = [6000, 18000, 30000]
 LR_VALUES = [1e-3, 1e-4, 1e-5, 1e-6]
+FLIP_ACC = [1., -1., 1.]
+FLIP_GYRO = [-1., 1., -1.]
 NUM_CHANNELS = 3
 NUM_CLASSES = 2
 NUM_SHARDS = 20
@@ -356,13 +358,13 @@ def _get_sequence_batch_fn(is_training):
 def _get_transformation_parser(is_training):
     """Return the data transformation parser."""
 
-    def transformation_parser(image_data, label_data):
+    def image_transformation_parser(image_data, label_data):
         """Apply distortions to image sequences."""
 
         if is_training:
 
             # Random rotation
-            rotation_degree = tf.random_uniform([], -2.0, 2.0)
+            rotation_degree = tf.random.uniform([], -2.0, 2.0)
             rotation_radian = rotation_degree * math.pi / 180
             image_data = tf.contrib.image.rotate(image_data,
                 angles=rotation_radian)
@@ -370,13 +372,13 @@ def _get_transformation_parser(is_training):
             # Random crop
             diff = ORIGINAL_SIZE - FRAME_SIZE + 1
             limit = [1, diff, diff, 1]
-            offset = tf.random_uniform(shape=tf.shape(limit),
+            offset = tf.random.uniform(shape=tf.shape(limit),
                 dtype=tf.int32, maxval=tf.int32.max) % limit
             size = [FLAGS.seq_length, FRAME_SIZE, FRAME_SIZE, NUM_CHANNELS]
             image_data = tf.slice(image_data, offset, size)
 
             # Random horizontal flip
-            condition = tf.less(tf.random_uniform([], 0, 1.0), .5)
+            condition = tf.less(tf.random.uniform([], 0, 1.0), .5)
             image_data = tf.cond(pred=condition,
                 true_fn=lambda: tf.image.flip_left_right(image_data),
                 false_fn=lambda: image_data)
@@ -388,7 +390,7 @@ def _get_transformation_parser(is_training):
                     return tf.map_fn(brightness, image_data)
                 else:
                     return tf.image.adjust_brightness(image_data, delta)
-            delta = tf.random_uniform([], -63, 63)
+            delta = tf.random.uniform([], -63, 63)
             image_data = _adjust_brightness(image_data, delta)
 
             # Random contrast change -
@@ -398,7 +400,7 @@ def _get_transformation_parser(is_training):
                     return tf.map_fn(contrast, image_data)
                 else:
                     return tf.image.adjust_contrast(image_data, contrast_factor)
-            contrast_factor = tf.random_uniform([], 0.2, 1.8)
+            contrast_factor = tf.random.uniform([], 0.2, 1.8)
             image_data = _adjust_contrast(image_data, contrast_factor)
 
         else:
@@ -428,12 +430,29 @@ def _get_transformation_parser(is_training):
 
         return image_data, label_data
 
+    def inert_transformation_parser(inert_data, label_data):
+        """Apply distortions to inertial sequences."""
+
+        if is_training:
+            # Random horizontal flip
+            def _flip_inertial(inert_data):
+                """Flip hands"""
+                mult = tf.tile(tf.concat([FLIP_ACC, FLIP_GYRO], axis=0), [2])
+                inert_data = tf.math.multiply(inert_data, mult)
+                return tf.concat([inert_data[:, 6:12], inert_data[:, 0:6]], axis=1)
+            condition = tf.less(tf.random.uniform([], 0, 1.0), .5)
+            inert_data = tf.cond(pred=condition,
+                true_fn=lambda: _flip_inertial(inert_data),
+                false_fn=lambda: inert_data)
+
+        return inert_data, label_data
+
     if FLAGS.input_mode == "video_fc7":
         return lambda f, l: (f, l)
     elif FLAGS.input_mode == "video_raw":
-        return transformation_parser
+        return image_transformation_parser
     elif FLAGS.input_mode == "inert":
-        return lambda f, l: (f, l)
+        return inert_transformation_parser
 
 # Run
 if __name__ == "__main__":
