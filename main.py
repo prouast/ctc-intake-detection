@@ -16,8 +16,10 @@ import lstm
 
 FRAME_SIZE = 128
 GRADIENT_CLIPPING_NORM = 10.0
-LR_BOUNDARIES = [6000, 18000, 30000]
-LR_VALUES = [1e-3, 1e-4, 1e-5, 1e-6]
+LR_BOUNDARIES = [2, 4, 6]
+LR_VALUE_DIV = [1., 10., 100., 1000.]
+LR_DECAY_RATE = 0.95
+LR_DECAY_STEPS = 1
 FLIP_ACC = [1., -1., 1.]
 FLIP_GYRO = [-1., 1., -1.]
 NUM_CHANNELS = 3
@@ -47,7 +49,7 @@ flags.DEFINE_integer(
 flags.DEFINE_float(
     name='lr_base', default=1e-3, help='Base learning rate.')
 flags.DEFINE_enum(
-    name='lr_decay_fn', default="exponential", enum_values=["exponential", "piecewise_constant"],
+    name='lr_decay_fn', default="piecewise_constant", enum_values=["exponential", "piecewise_constant"],
     help='What is the input mode')
 flags.DEFINE_float(
     name='lr_decay_rate', default=0.92, help='Rate at which learning rate decays.')
@@ -85,8 +87,38 @@ def run_experiment(arg=None):
     elif FLAGS.model == "lstm":
         model = lstm.Model(NUM_CLASSES, FLAGS.l2_lambda)
 
-    # Instantiate the optimizer
-    optimizer = tf.keras.optimizers.Adam(learning_rate=FLAGS.lr_base)
+    # Instantiate learning rate schedule and optimizer
+    if FLAGS.lr_decay_fn == "exponential":
+        lr_schedule = keras.optimizers.schedules.ExponentialDecay(
+            initial_learning_rate=FLAGS.lr_base,
+            decay_steps=LR_DECAY_STEPS, decay_rate=LR_DECAY_RATE, staircase=False)
+    elif FLAGS.lr_decay_fn == "piecewise_constant":
+        values = np.divide(FLAGS.lr_base, LR_VALUE_DIV)
+        lr_schedule = keras.optimizers.schedules.PiecewiseConstantDecay(
+            boundaries=LR_BOUNDARIES, values=values.tolist())
+    class Adam(keras.optimizers.Adam):
+        def __init__(self, **kwargs):
+            super(Adam, self).__init__(**kwargs)
+            self._epochs = None
+        def _decayed_lr(self, var_dtype):
+            """Get decayed learning rate based on epochs."""
+            lr_t = self._get_hyper("learning_rate", var_dtype)
+            if isinstance(lr_t, tf.keras.optimizers.schedules.LearningRateSchedule):
+                epochs = tf.cast(self.epochs, var_dtype)
+                lr_t = tf.cast(lr_t(epochs), var_dtype)
+            return lr_t
+        @property
+        def epochs(self):
+            """Variable. The number of epochs."""
+            if self._epochs is None:
+                self._epochs = self.add_weight(
+                    "epochs", shape=[], dtype=tf.int64, trainable=False,
+                    aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA)
+                self._weights.append(self._epochs)
+            return self._epochs
+        def finish_epoch(self):
+            return self._epochs.assign_add(1)
+    optimizer = Adam(learning_rate=lr_schedule)
 
     # Get the datasets
     train_dataset = dataset(is_training=True, data_dir=FLAGS.train_dir)
@@ -173,6 +205,7 @@ def run_experiment(arg=None):
                     tf.summary.scalar('metrics/recall', data=train_rec, step=global_step)
                     tf.summary.scalar('metrics/f1', data=train_f1, step=global_step)
                     tf.summary.scalar('training/loss', data=loss, step=global_step)
+                    tf.summary.scalar('training/learning_rate', data=lr_schedule(epoch), step=global_step)
                     train_writer.flush()
 
             # Evaluate every FLAGS.eval_steps steps.
@@ -238,8 +271,8 @@ def run_experiment(arg=None):
             # Increment global step
             global_step += 1
 
-        # Display metrics at the end of each epoch.
         logging.info('Finished epoch %s' % (epoch,))
+        optimizer.finish_epoch()
 
         # Reset training metrics at the end of each epoch
         train_pre_metric.reset_states()
