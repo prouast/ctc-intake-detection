@@ -1,6 +1,7 @@
 """Save checkpoints"""
 
 from absl import logging
+import glob
 import os
 
 class Checkpoint(object):
@@ -17,7 +18,7 @@ class Checkpoint(object):
         self.file = file
 
 class ModelSaver(object):
-    """ """
+    """Save the best model checkpoints to disk"""
     checkpoints = None
     dir = None
     metric = None
