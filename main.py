@@ -30,14 +30,14 @@ flags.DEFINE_integer(
 flags.DEFINE_string(
     name='eval_dir', default='data/raw/eval', help='Directory for val data.')
 flags.DEFINE_integer(
-    name='eval_steps', default=250, help='Eval after every x steps.')
+    name='eval_steps', default=250, help='Eval and save best model after every x steps.')
 flags.DEFINE_enum(
     name='input_mode', default="video_raw", enum_values=["video_raw", "inert", "video_fc7"],
     help='What is the input mode')
 flags.DEFINE_integer(
-    name='input_features', default=2048, help='Number of input features.')
+    name='input_features', default=2048, help='Number of input features in fc7 mode.')
 flags.DEFINE_integer(
-    name='input_fps', default=8, help='Number of input frames per second.')
+    name='input_fps', default=8, help='Frames per seconds in input data.')
 flags.DEFINE_float(
     name='l2_lambda', default=1e-3, help='l2 regularization lambda.')
 flags.DEFINE_integer(
@@ -58,6 +58,8 @@ flags.DEFINE_enum(
 flags.DEFINE_string(
     name='model_dir', default='run',
     help='Output directory for model and training stats.')
+flags.DEFINE_integer(
+    name='seq_fps', default=8, help='Target frames per seconds in sequence generation.')
 flags.DEFINE_integer(
     name='seq_length', default=16,
     help='Number of sequence elements.')
@@ -345,7 +347,7 @@ def _get_input_parser(table):
 
 def _get_sequence_batch_fn(is_training):
     """Return sliding batched dataset or batched dataset."""
-    shift = 1 if is_training else FLAGS.seq_length
+    shift = int(FLAGS.input_fps/FLAGS.seq_fps) if is_training else FLAGS.seq_length
     return lambda dataset: dataset.window(
         size=FLAGS.seq_length, shift=shift, drop_remainder=True).flat_map(
             lambda f_w, l_w: tf.data.Dataset.zip(
