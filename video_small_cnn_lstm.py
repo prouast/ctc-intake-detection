@@ -2,72 +2,58 @@
 
 import tensorflow as tf
 
+class ConvBlock(tf.keras.Model):
+    """One block of Conv2D-BN-Dropout-MaxPool2D"""
+    def __init__(self, num_filters, l2_lambda):
+        super(ConvBlock, self).__init__()
+        self.max_pool = max_pool
+        self.conv = tf.keras.layers.Conv2D(
+            filters=num_filters, kernel_size=3, padding='same',
+            activation=tf.nn.relu,
+            kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
+        self.bn = tf.keras.layers.BatchNormalization(momentum=0.9)
+        self.dropout = tf.keras.layers.Dropout(rate=0.5)
+        self.max_pool = tf.keras.layers.MaxPool2D(pool_size=2, strides=2)
+    def __call__(self, inputs, training=False):
+        inputs = self.conv(inputs)
+        inputs = self.bn(inputs)
+        inputs = self.dropout(inputs)
+        inputs = self.max_pool(inputs)
+        return inputs
+
 class Model(tf.keras.Model):
-    """Base class for building ConvLSTM network."""
+    """CNN-LSTM Model for inertial data"""
 
-    def __init__(self, seq_length, num_classes, l2_lambda):
-        """Create a model to learn features on an object of the dimensions
-            [seq_length, width, depth, channels].
-
-        Args:
-            params: Hyperparameters.
-        """
-        self.l2_lambda = l2_lambda
+    def __init__(self, num_classes, l2_lambda):
+        super(Model, self).__init__()
         self.num_conv = [32, 32, 64, 64]
-        self.frame_size = 128
-        self.num_channels = 3
-        self.seq_length = seq_length
         self.num_dense = 1024
-        self.num_lstm = 128
-        self.num_classes = num_classes
-
-    def __call__(self, inputs, is_training):
-        """Add operations to learn features on a batch of image sequences.
-
-        Args:
-            inputs: A tensor representing a batch of input image sequences.
-            is_training: A boolean representing whether training is active.
-
-        Returns:
-            A tensor with shape [batch_size, seq_length, num_classes + 1]
-        """
-        # Reshape for CNN
-        inputs = tf.reshape(inputs,
-            [-1, self.frame_size, self.frame_size, self.num_channels])
-        # Conv blocks
+        self.num_lstm = [64, 128]
+        self.conv_blocks = []
         for i, num_filters in enumerate(self.num_conv):
-            # Batch norm
-            inputs = tf.keras.layers.BatchNormalization(
-                axis=3, center=True, scale=True, fused=True)(inputs)
-            # Dropout if not first conv layer
-            if i > 0:
-                inputs = tf.keras.layers.Dropout(
-                    rate=0.5)(inputs)
-            # 2d conv
-            inputs = tf.keras.layers.Conv2D(
-                filters=num_filters, kernel_size=3, padding='same',
-                activation=tf.nn.relu,
-                kernel_regularizer=tf.keras.regularizers.l2(self.l2_lambda))(inputs)
-            # Max pool
-            inputs = tf.keras.layers.MaxPool2D(
-                pool_size=2, strides=2)(inputs)
-        # Dense
-        inputs = tf.keras.layers.Flatten()(inputs)
-        inputs = tf.keras.layers.Dropout(
-            rate=0.5)(inputs)
-        inputs = tf.keras.layers.Dense(
+            self.conv_blocks.append(ConvBlock(num_filters, l2_lambda))
+        self.flatten = tf.keras.layers.Flatten()
+        self.dense_1 = tf.keras.layers.Dense(
             units=self.num_dense, activation=tf.nn.relu,
-            kernel_regularizer=tf.keras.regularizers.l2(self.l2_lambda))(inputs)
-        # Reshape for LSTM
-        inputs = tf.reshape(inputs, [-1, self.seq_length, self.num_dense])
-        inputs = tf.keras.layers.LSTM(
-            units=self.num_lstm, return_sequences=True,
-            kernel_regularizer=tf.keras.regularizers.l2(self.l2_lambda))(inputs)
-        # Classification
-        inputs = tf.keras.layers.Dropout(
-            rate=0.5)(inputs)
-        inputs = tf.keras.layers.Dense(
-            units=self.num_classes + 1,
-            kernel_regularizer=tf.keras.regularizers.l2(self.l2_lambda))(inputs)
+            kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
+        self.dropout = tf.keras.layers.Dropout(rate=0.5)
+        self.lstm_blocks = []
+        for i, num_units in enumerate(self.num_lstm):
+            self.lstm_blocks.append(tf.keras.layers.LSTM(
+                units=num_units, return_sequences=True,
+                kernel_regularizer=tf.keras.regularizers.l2(l2_lambda)))
+        self.dense_2 = tf.keras.layers.Dense(
+            units=num_classes + 1,
+            kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
 
+    def __call__(self, inputs, training=False):
+        for conv_block in self.conv_blocks:
+            inputs = conv_block(inputs)
+        inputs = self.flatten(inputs)
+        inputs = self.dense_1(inputs)
+        inputs = self.dropout(inputs)
+        for lstm_block in self.lstm_blocks:
+            inputs = lstm_block(inputs)
+        inputs = self.dense_2(inputs)
+        inputs = self.dropout(inputs)
         return inputs

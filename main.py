@@ -15,8 +15,7 @@ import inert_small_cnn_lstm
 import lstm
 
 FRAME_SIZE = 128
-GRADIENT_CLIPPING_NORM = 10.0
-LR_BOUNDARIES = [2, 4, 6]
+LR_BOUNDARIES = [1, 3, 5]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
 LR_DECAY_RATE = 0.95
 LR_DECAY_STEPS = 1
@@ -96,28 +95,6 @@ def run_experiment(arg=None):
         values = np.divide(FLAGS.lr_base, LR_VALUE_DIV)
         lr_schedule = keras.optimizers.schedules.PiecewiseConstantDecay(
             boundaries=LR_BOUNDARIES, values=values.tolist())
-    class Adam(keras.optimizers.Adam):
-        def __init__(self, **kwargs):
-            super(Adam, self).__init__(**kwargs)
-            self._epochs = None
-        def _decayed_lr(self, var_dtype):
-            """Get decayed learning rate based on epochs."""
-            lr_t = self._get_hyper("learning_rate", var_dtype)
-            if isinstance(lr_t, tf.keras.optimizers.schedules.LearningRateSchedule):
-                epochs = tf.cast(self.epochs, var_dtype)
-                lr_t = tf.cast(lr_t(epochs), var_dtype)
-            return lr_t
-        @property
-        def epochs(self):
-            """Variable. The number of epochs."""
-            if self._epochs is None:
-                self._epochs = self.add_weight(
-                    "epochs", shape=[], dtype=tf.int64, trainable=False,
-                    aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA)
-                self._weights.append(self._epochs)
-            return self._epochs
-        def finish_epoch(self):
-            return self._epochs.assign_add(1)
     optimizer = Adam(learning_rate=lr_schedule)
 
     # Get the datasets
@@ -183,36 +160,41 @@ def run_experiment(arg=None):
             # Decode logits into predictions
             predictions, _ = greedy_decode_with_indices(logits, NUM_CLASSES, seq_length)
 
-            # Calculate metric
+            # Update metrics
             train_pre_metric(labels, predictions)
             train_rec_metric(labels, predictions)
             train_f1_metric(labels, predictions)
 
-            train_pre = train_pre_metric.result()
-            train_rec = train_rec_metric.result()
-            train_f1 = train_f1_metric.result()
-
             # Log every FLAGS.log_steps steps.
             if global_step % FLAGS.log_steps == 0:
+                # Get metrics
+                train_pre = train_pre_metric.result()
+                train_rec = train_rec_metric.result()
+                train_f1 = train_f1_metric.result()
+                # Console
                 logging.info('Step %s in epoch %s; global step %s' % (step, epoch, global_step))
                 logging.info('Seen this epoch: %s samples' % ((step + 1) * FLAGS.batch_size))
                 logging.info('Training loss (this step): %s' % float(loss))
                 logging.info('Training precision (this epoch): %s' % (float(train_pre),))
                 logging.info('Training recall (this epoch): %s' % (float(train_rec),))
                 logging.info('Training f1 (this epoch): %s' % (float(train_f1),))
+                # TensorBoard
                 with train_writer.as_default():
                     tf.summary.scalar('metrics/precision', data=train_pre, step=global_step)
                     tf.summary.scalar('metrics/recall', data=train_rec, step=global_step)
                     tf.summary.scalar('metrics/f1', data=train_f1, step=global_step)
                     tf.summary.scalar('training/loss', data=loss, step=global_step)
                     tf.summary.scalar('training/learning_rate', data=lr_schedule(epoch), step=global_step)
-                    train_writer.flush()
+                train_writer.flush()
 
             # Evaluate every FLAGS.eval_steps steps.
             if global_step % FLAGS.eval_steps == 0:
                 logging.info('Evaluating at global step %s' % global_step)
 
+                # Keep track of eval losses
                 eval_losses = []
+
+                # Iterate through eval batches
                 for i, (eval_features, eval_labels) in enumerate(eval_dataset):
 
                     # Adjust seq_length and labels
@@ -245,24 +227,30 @@ def run_experiment(arg=None):
                     eval_rec_metric(eval_labels, eval_predictions)
                     eval_f1_metric(eval_labels, eval_predictions)
 
+                # Get metrics
                 eval_pre = eval_pre_metric.result()
                 eval_rec = eval_rec_metric.result()
                 eval_f1 = eval_f1_metric.result()
                 eval_loss = np.mean(eval_losses)
 
+                # Console
                 logging.info('Evaluation loss: %s' % float(eval_loss))
                 logging.info('Evaluation precision: %s' % (float(eval_pre),))
                 logging.info('Evaluation recall: %s' % (float(eval_rec),))
                 logging.info('Evaluation f1: %s' % (float(eval_f1),))
+
+                # TensorBoard
                 with eval_writer.as_default():
                     tf.summary.scalar('metrics/precision', data=eval_pre, step=global_step)
                     tf.summary.scalar('metrics/recall', data=eval_rec, step=global_step)
                     tf.summary.scalar('metrics/f1', data=eval_f1, step=global_step)
                     tf.summary.scalar('training/loss', data=eval_loss, step=global_step)
-                    eval_pre_metric.reset_states()
-                    eval_rec_metric.reset_states()
-                    eval_f1_metric.reset_states()
-                    eval_writer.flush()
+                eval_writer.flush()
+
+                # Reset eval metric states after evaluation
+                eval_pre_metric.reset_states()
+                eval_rec_metric.reset_states()
+                eval_f1_metric.reset_states()
 
                 # Save best models
                 model_saver.save(model=model, score=eval_f1.numpy(),
@@ -280,7 +268,33 @@ def run_experiment(arg=None):
         train_f1_metric.reset_states()
         train_writer.flush()
 
+class Adam(keras.optimizers.Adam):
+    """Adam optimizer that retrieves learning rate based on epochs"""
+    def __init__(self, **kwargs):
+        super(Adam, self).__init__(**kwargs)
+        self._epochs = None
+    def _decayed_lr(self, var_dtype):
+        """Get learning rate based on epochs."""
+        lr_t = self._get_hyper("learning_rate", var_dtype)
+        if isinstance(lr_t, tf.keras.optimizers.schedules.LearningRateSchedule):
+            epochs = tf.cast(self.epochs, var_dtype)
+            lr_t = tf.cast(lr_t(epochs), var_dtype)
+        return lr_t
+    @property
+    def epochs(self):
+        """Variable. The number of epochs."""
+        if self._epochs is None:
+            self._epochs = self.add_weight(
+                "epochs", shape=[], dtype=tf.int64, trainable=False,
+                aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA)
+            self._weights.append(self._epochs)
+        return self._epochs
+    def finish_epoch(self):
+        """Increment epoch count"""
+        return self._epochs.assign_add(1)
+
 def dense_to_sparse(input, eos_token=0):
+    """Convert dense tensor to sparse"""
     idx = tf.where(tf.not_equal(input, tf.constant(eos_token, input.dtype)))
     values = tf.gather_nd(input, idx)
     shape = tf.shape(input, out_type=tf.int64)
@@ -288,7 +302,7 @@ def dense_to_sparse(input, eos_token=0):
     return sparse
 
 def adjust_labels(labels, seq_pool, seq_length, batch_size):
-    """If seq_pool performed, adjust seq_length and labels"""
+    """If seq_pool performed, adjust seq_length and labels by slicing"""
     if seq_pool > 1:
         labels = tf.strided_slice(
             input_=labels, begin=[0, seq_pool-1], end=[batch_size, seq_length],

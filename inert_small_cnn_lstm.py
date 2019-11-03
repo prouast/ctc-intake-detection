@@ -1,12 +1,9 @@
 """CNN-LSTM Model"""
 
-# https://stackoverflow.com/questions/52826134/keras-model-subclassing-examples
-# https://github.com/tensorflow/tensorflow/issues/29073
-
 import tensorflow as tf
 
 class ConvBlock(tf.keras.Model):
-
+    """One block of Conv1D-BN-Dropout-MaxPool1D"""
     def __init__(self, num_filters, max_pool, l2_lambda):
         super(ConvBlock, self).__init__()
         self.max_pool = max_pool
@@ -18,25 +15,12 @@ class ConvBlock(tf.keras.Model):
         self.dropout = tf.keras.layers.Dropout(rate=0.5)
         if max_pool:
             self.max_pool = tf.keras.layers.MaxPool1D(pool_size=2, strides=2)
-
     def __call__(self, inputs, training=False):
         inputs = self.conv(inputs)
         inputs = self.bn(inputs)
         inputs = self.dropout(inputs)
         if self.max_pool:
             inputs = self.max_pool(inputs)
-        return inputs
-
-class LSTMBlock(tf.keras.Model):
-
-    def __init__(self, num_units, l2_lambda):
-        super(LSTMBlock, self).__init__()
-        self.lstm = tf.keras.layers.LSTM(
-            units=num_units, return_sequences=True,
-            kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
-
-    def __call__(self, inputs, training=False):
-        inputs = self.lstm(inputs)
         return inputs
 
 class Model(tf.keras.Model):
@@ -56,7 +40,9 @@ class Model(tf.keras.Model):
         self.dropout = tf.keras.layers.Dropout(rate=0.5)
         self.lstm_blocks = []
         for i, num_units in enumerate(self.num_lstm):
-            self.lstm_blocks.append(LSTMBlock(num_units, l2_lambda))
+            self.lstm_blocks.append(tf.keras.layers.LSTM(
+                units=num_units, return_sequences=True,
+                kernel_regularizer=tf.keras.regularizers.l2(l2_lambda)))
         self.dense_2 = tf.keras.layers.Dense(
             units=num_classes + 1,
             kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
