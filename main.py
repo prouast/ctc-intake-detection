@@ -23,9 +23,10 @@ FLIP_ACC = [1., -1., 1.]
 FLIP_GYRO = [-1., 1., -1.]
 NUM_CHANNELS = 3
 NUM_CLASSES = 2
-NUM_SHARDS = 20
 NUM_SHUFFLE = 50000
+NUM_TRAINING_FILES = 62
 ORIGINAL_SIZE = 140
+AUTOTUNE = tf.data.experimental.AUTOTUNE
 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer(
@@ -324,18 +325,20 @@ def dataset(is_training, data_dir):
                 ["Idle", "Intake"], [0, 1]), -1)
     # Shuffle files if needed
     if is_training:
-        files = files.shuffle(NUM_SHARDS)
+        files = files.shuffle(NUM_TRAINING_FILES)
     dataset = files.interleave(
         lambda filename:
             tf.data.TFRecordDataset(filename)
-            .map(map_func=_get_input_parser(table), num_parallel_calls=2)
+            .map(map_func=_get_input_parser(table),
+                num_parallel_calls=AUTOTUNE)
             .apply(_get_sequence_batch_fn(is_training))
             .map(map_func=_get_transformation_parser(is_training),
-                num_parallel_calls=2),
-        cycle_length=NUM_SHARDS)
+                num_parallel_calls=AUTOTUNE),
+        cycle_length=4)
     if is_training:
         dataset = dataset.shuffle(NUM_SHUFFLE)
     dataset = dataset.batch(FLAGS.batch_size, drop_remainder=True)
+    dataset = dataset.prefetch(buffer_size=AUTOTUNE)
 
     return dataset
 
