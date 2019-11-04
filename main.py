@@ -15,7 +15,7 @@ import inert_small_cnn_lstm
 import lstm
 
 FRAME_SIZE = 128
-LR_BOUNDARIES = [1, 3, 5]
+LR_BOUNDARIES = [2, 7, 10]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
 LR_DECAY_RATE = 0.95
 LR_DECAY_STEPS = 1
@@ -90,7 +90,7 @@ def run_experiment(arg=None):
     if FLAGS.lr_decay_fn == "exponential":
         lr_schedule = keras.optimizers.schedules.ExponentialDecay(
             initial_learning_rate=FLAGS.lr_base,
-            decay_steps=LR_DECAY_STEPS, decay_rate=LR_DECAY_RATE, staircase=False)
+            decay_steps=LR_DECAY_STEPS, decay_rate=LR_DECAY_RATE, staircase=True)
     elif FLAGS.lr_decay_fn == "piecewise_constant":
         values = np.divide(FLAGS.lr_base, LR_VALUE_DIV)
         lr_schedule = keras.optimizers.schedules.PiecewiseConstantDecay(
@@ -132,30 +132,29 @@ def run_experiment(arg=None):
             labels = adjust_labels(labels, FLAGS.seq_pool, FLAGS.seq_length,
                 FLAGS.batch_size)
 
-            # Open a GradientTape to record the operations run during forward pass
-            with tf.GradientTape() as tape:
-
-                # Run the forward pass
-                logits = model(features)
-
-                # Calculate ctc loss from SparseTensor without collapsing labels
-                seq_lengths = tf.fill([FLAGS.batch_size], seq_length)
-                loss = tf.compat.v1.nn.ctc_loss(
-                    labels=dense_to_sparse(labels, eos_token=-1),
-                    inputs=logits,
-                    sequence_length=seq_lengths,
-                    preprocess_collapse_repeated=True,
-                    ctc_merge_repeated=False,
-                    time_major=False)
-
-                # Reduce loss to scalar
-                loss = tf.reduce_mean(loss)
-
-            # Retrieve gradient with gradient tape
-            grads = tape.gradient(loss, model.trainable_weights)
-
-            # Apply the gradients
-            optimizer.apply_gradients(zip(grads, model.trainable_weights))
+            # Training step
+            def train_step(features, labels):
+                # Open a GradientTape to record the operations run during forward pass
+                with tf.GradientTape() as tape:
+                    # Run the forward pass
+                    logits = model(features, training=True)
+                    # Calculate ctc loss from SparseTensor without collapsing labels
+                    seq_lengths = tf.fill([FLAGS.batch_size], seq_length)
+                    loss = tf.compat.v1.nn.ctc_loss(
+                        labels=dense_to_sparse(labels, eos_token=-1),
+                        inputs=logits,
+                        sequence_length=seq_lengths,
+                        preprocess_collapse_repeated=True,
+                        ctc_merge_repeated=False,
+                        time_major=False)
+                        # Reduce loss to scalar
+                    loss = tf.reduce_mean(loss)
+                    # Retrieve gradient with gradient tape
+                    grads = tape.gradient(loss, model.trainable_weights)
+                # Apply the gradients
+                optimizer.apply_gradients(zip(grads, model.trainable_weights))
+                return logits, loss
+            logits, loss = train_step(features, labels)
 
             # Decode logits into predictions
             predictions, _ = greedy_decode_with_indices(logits, NUM_CLASSES, seq_length)
@@ -175,9 +174,9 @@ def run_experiment(arg=None):
                 logging.info('Step %s in epoch %s; global step %s' % (step, epoch, global_step))
                 logging.info('Seen this epoch: %s samples' % ((step + 1) * FLAGS.batch_size))
                 logging.info('Training loss (this step): %s' % float(loss))
-                logging.info('Training precision (this epoch): %s' % (float(train_pre),))
-                logging.info('Training recall (this epoch): %s' % (float(train_rec),))
-                logging.info('Training f1 (this epoch): %s' % (float(train_f1),))
+                logging.info('Training precision (this step): %s' % (float(train_pre),))
+                logging.info('Training recall (this step): %s' % (float(train_rec),))
+                logging.info('Training f1 (this step): %s' % (float(train_f1),))
                 # TensorBoard
                 with train_writer.as_default():
                     tf.summary.scalar('metrics/precision', data=train_pre, step=global_step)
@@ -185,6 +184,9 @@ def run_experiment(arg=None):
                     tf.summary.scalar('metrics/f1', data=train_f1, step=global_step)
                     tf.summary.scalar('training/loss', data=loss, step=global_step)
                     tf.summary.scalar('training/learning_rate', data=lr_schedule(epoch), step=global_step)
+                train_pre_metric.reset_states()
+                train_rec_metric.reset_states()
+                train_f1_metric.reset_states()
                 train_writer.flush()
 
             # Evaluate every FLAGS.eval_steps steps.
@@ -201,21 +203,22 @@ def run_experiment(arg=None):
                     eval_labels = adjust_labels(eval_labels, FLAGS.seq_pool,
                         FLAGS.seq_length, FLAGS.batch_size)
 
-                    # Run the forward pass
-                    eval_logits = model(eval_features)
-
-                    # Calculate ctc loss from SparseTensor without collapsing labels
-                    seq_lengths = tf.fill([FLAGS.batch_size], seq_length)
-                    eval_loss = tf.compat.v1.nn.ctc_loss(
-                        labels=dense_to_sparse(eval_labels, eos_token=-1),
-                        inputs=eval_logits,
-                        sequence_length=seq_lengths,
-                        preprocess_collapse_repeated=True,
-                        ctc_merge_repeated=False,
-                        time_major=False)
-
-                    # Reduce loss to scalar
-                    eval_loss = tf.reduce_mean(eval_loss)
+                    def eval_step(features, labels):
+                        # Run the forward pass
+                        logits = model(features, training=False)
+                        # Calculate ctc loss from SparseTensor without collapsing labels
+                        seq_lengths = tf.fill([FLAGS.batch_size], seq_length)
+                        loss = tf.compat.v1.nn.ctc_loss(
+                            labels=dense_to_sparse(eval_labels, eos_token=-1),
+                            inputs=logits,
+                            sequence_length=seq_lengths,
+                            preprocess_collapse_repeated=True,
+                            ctc_merge_repeated=False,
+                            time_major=False)
+                        # Reduce loss to scalar
+                        loss = tf.reduce_mean(loss)
+                        return logits, loss
+                    eval_logits, eval_loss = eval_step(eval_features, eval_labels)
                     eval_losses.append(eval_loss.numpy())
 
                     # Decode logits into predictions
@@ -261,12 +264,6 @@ def run_experiment(arg=None):
 
         logging.info('Finished epoch %s' % (epoch,))
         optimizer.finish_epoch()
-
-        # Reset training metrics at the end of each epoch
-        train_pre_metric.reset_states()
-        train_rec_metric.reset_states()
-        train_f1_metric.reset_states()
-        train_writer.flush()
 
 class Adam(keras.optimizers.Adam):
     """Adam optimizer that retrieves learning rate based on epochs"""
