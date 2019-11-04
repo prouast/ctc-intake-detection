@@ -3,8 +3,8 @@
 import tensorflow as tf
 
 class Model(tf.keras.Model):
-    """LSTM Model for fc7 data."""
 
+    """LSTM Model for fc7 data."""
     def __init__(self, num_classes, l2_lambda):
         super(Model, self).__init__()
         self.num_lstm = [64]

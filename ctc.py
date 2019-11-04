@@ -2,6 +2,7 @@
 
 import tensorflow as tf
 
+@tf.function
 def _collapse_sequences(labels, seq_length, def_val=1, pad_val=0, replace_with_idle=True, pos='middle'):
     """Collapse sequences of labels, optionally replacing with default value
 
@@ -130,6 +131,7 @@ def _collapse_sequences(labels, seq_length, def_val=1, pad_val=0, replace_with_i
 
     return result, seq_length
 
+@tf.function
 def greedy_decode_with_indices(inputs, num_classes, seq_length, pos='middle'):
     """Naive inference by retrieving most likely output at each time-step.
 

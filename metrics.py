@@ -3,6 +3,7 @@
 
 import tensorflow as tf
 
+@tf.function
 def evaluate_interval_detection(labels, predictions, def_val, seq_length):
     """Evaluate interval detection for sequences by calculating
         tp, fp, and fn.

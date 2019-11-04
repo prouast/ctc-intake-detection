@@ -4,6 +4,7 @@ import tensorflow as tf
 
 class ConvBlock(tf.keras.Model):
     """One block of Conv2D-BN-Dropout-MaxPool2D"""
+
     def __init__(self, num_filters, l2_lambda):
         super(ConvBlock, self).__init__()
         self.max_pool = max_pool
@@ -14,6 +15,8 @@ class ConvBlock(tf.keras.Model):
         self.bn = tf.keras.layers.BatchNormalization(momentum=0.9)
         self.dropout = tf.keras.layers.Dropout(rate=0.5)
         self.max_pool = tf.keras.layers.MaxPool2D(pool_size=2, strides=2)
+
+    @tf.function
     def __call__(self, inputs, training=False):
         inputs = self.conv(inputs)
         inputs = self.bn(inputs)
