@@ -2,17 +2,17 @@
 
 import tensorflow as tf
 
-@tf.function
-def _collapse_sequences(labels, seq_length, def_val=1, pad_val=0, replace_with_idle=True, pos='middle'):
+def _collapse_sequences(labels, seq_length, def_val, pad_val, replace_with_def, pos):
     """Collapse sequences of labels, optionally replacing with default value
 
     Args:
         labels: The labels, which includes default values (e.g, 1) and
             sequences of interest (e.g., [1, 1, 2, 2, 2, 1, 1, 3, 3, 3, 1]).
+        seq_length: The length of each sequence
         def_val: The value which denotes the default value
         pad_val: The value which is used to pad sequences at the end
-        replace_with_idle: If true, collapsed values are replaced with the
-            idle val. If false, collapsed values are removed (Tensor is padded
+        replace_with_def: If true, collapsed values are replaced with def_val.
+            If false, collapsed values are removed (Tensor is padded
             with 0).
         pos: The position relative to the original sequence to keep the
             remaining non-collapsed value.
@@ -28,7 +28,7 @@ def _collapse_sequences(labels, seq_length, def_val=1, pad_val=0, replace_with_i
     prev_mask = tf.concat([tf.ones_like(labels[:, :1], tf.bool), diff_mask], axis=1)
     next_mask = tf.concat([diff_mask, tf.ones_like(labels[:, :1], tf.bool)], axis=1)
 
-    if replace_with_idle:
+    if replace_with_def:
 
         # Masks for non-default vals, sequence starts and ends
         not_default_mask = tf.not_equal(labels, tf.fill(tf.shape(labels), def_val))
@@ -131,32 +131,118 @@ def _collapse_sequences(labels, seq_length, def_val=1, pad_val=0, replace_with_i
 
     return result, seq_length
 
+def _dense_to_sparse(input, eos_token=-1):
+    """Convert dense tensor to sparse"""
+    idx = tf.where(tf.not_equal(input, tf.constant(eos_token, input.dtype)))
+    values = tf.gather_nd(input, idx)
+    shape = tf.shape(input, out_type=tf.int64)
+    sparse = tf.SparseTensor(idx, values, shape)
+    return sparse
+
 @tf.function
-def greedy_decode_with_indices(inputs, num_classes, seq_length, pos='middle'):
+def _ctc_loss_selective_collapse(labels, logits, batch_size, seq_length, def_val, pad_val, pos='middle'):
+    """Collapse repeated non-default values in labels, but keep default values.
+        This should force the network to learn outputting either only one event value in a row.
+        For inference, epsilons should be replaced with def_val"""
+    # Collapse repeated non-def_val's in labels without replacing
+    labels, _ = _collapse_sequences(labels, seq_length,
+        def_val=def_val, pad_val=pad_val, replace_with_def=False, pos=pos)
+    # CTC loss with selectively collapsed labels
+    seq_lengths = tf.fill([batch_size], seq_length)
+    loss = tf.compat.v1.nn.ctc_loss(
+        labels=_dense_to_sparse(labels, eos_token=-1),
+        inputs=logits,
+        sequence_length=seq_lengths,
+        preprocess_collapse_repeated=False,
+        ctc_merge_repeated=False,
+        time_major=False)
+    # Reduce loss to scalar
+    return tf.reduce_mean(loss)
+
+@tf.function
+def _ctc_loss_all_collapse(labels, logits, batch_size, seq_length, def_val, pad_val, pos='middle'):
+    """Collapse all repeated values as part of ctc loss."""
+    # CTC loss with all collapsed labels
+    seq_lengths = tf.fill([batch_size], seq_length)
+    loss = tf.compat.v1.nn.ctc_loss(
+        labels=_dense_to_sparse(labels, eos_token=-1),
+        inputs=logits,
+        sequence_length=seq_lengths,
+        preprocess_collapse_repeated=True,
+        ctc_merge_repeated=False,
+        time_major=False)
+    # Reduce loss to scalar
+    return tf.reduce_mean(loss)
+
+@tf.function
+def _ctc_loss_naive(labels, logits, batch_size, seq_length):
+    """Naive CTC loss
+    This loss only considers the probability of the single path
+        implied by the labels without any collapsing. Loss is computed as the
+        negative log likelihood of the probability.
+    """
+    logits = tf.nn.softmax(logits)
+    flat_labels = tf.reshape(labels, [-1])
+    flat_logits = tf.reshape(logits, [-1])
+    # Reduce num_classes by getting indexes that should have high logits
+    flat_idx = flat_labels + tf.cast(tf.range(tf.shape(logits)[0] * \
+        tf.shape(logits)[1]) * tf.shape(logits)[2], tf.int32)
+    loss = tf.reshape(tf.gather(flat_logits, flat_idx), [batch_size, seq_length])
+    # Reduce seq_length by negative log-likelihood of product
+    loss = tf.reduce_sum(tf.negative(tf.math.log(loss)), axis=1)
+    # Reduce mean of batch losses
+    loss = tf.reduce_mean(loss)
+    return loss
+
+def ctc_loss(labels, logits, ctc_mode, batch_size, seq_length, def_val, pad_val, pos='middle'):
+    """Return ctc loss corresponding to ctc_mode"""
+    if ctc_mode == 'naive':
+        return _ctc_loss_naive(labels, logits,
+            batch_size=batch_size, seq_length=seq_length)
+    elif ctc_mode == 'selective_collapse':
+        return _ctc_loss_selective_collapse(labels, logits,
+            batch_size=batch_size, seq_length=seq_length, def_val=0, pad_val=-1)
+    elif ctc_mode == 'all_collapse':
+        return _ctc_loss_all_collapse(labels, logits,
+            batch_size=batch_size, seq_length=seq_length, def_val=0, pad_val=-1)
+
+@tf.function
+def _greedy_decode_and_collapse(inputs, num_classes, seq_length, use_epsilon=True, def_val=0, pad_val=-1, pos='middle'):
     """Naive inference by retrieving most likely output at each time-step.
 
     Args:
-        inputs: The prediction in form of logits. [samples, time_steps, num_classes+1]
-            Contains an extra class for CTC epsilon at the last index
+        inputs: The prediction in form of logits. [samples, time_steps, num_classes]
         num_classes: The number of classes considered in prediction.
         seq_length: Sequence length for each item in inputs.
+        use_epsilon: If yes, contains an extra class for CTC epsilon at the last index
         pos: How should predictions (excluding 0) be collapsed to 0?
     Returns:
         Tuple
         * the decoded sequence [seq_length]
         * indices of 1 predictions
     """
-    def decode(input):
+    def greedy_decode(input):
         cat_ids = tf.cast(tf.argmax(input, axis=1), tf.int32)
-        cat_ids = tf.where(tf.equal(cat_ids, num_classes),
-            tf.zeros([seq_length], tf.int32), cat_ids) # Set epsilons to 0
+        if use_epsilon:
+            cat_ids = tf.where(tf.equal(cat_ids, num_classes-1),
+                tf.zeros([seq_length], tf.int32), cat_ids) # Set epsilons to 0
         row_ids = tf.range(tf.shape(input)[0], dtype=tf.int32)
         idx = tf.stack([row_ids, cat_ids], axis=1)
         return idx[:,1]
+    decoded = tf.map_fn(greedy_decode, inputs, dtype=tf.int32)
+    collapsed, _ = _collapse_sequences(decoded, seq_length, def_val=def_val,
+        pad_val=pad_val, replace_with_def=True, pos=pos)
+    # Return collapsed output and indices of ones
+    return collapsed, decoded
 
-    decoded = tf.map_fn(decode, inputs, dtype=tf.int32)
-    collapsed, _ = _collapse_sequences(decoded, seq_length, def_val=0, pad_val=-1,
-        replace_with_idle=True, pos=pos)
-    one_indices = tf.where(tf.equal(collapsed, tf.constant(1, tf.int32)))
-
-    return collapsed, one_indices
+def ctc_decode_logits(logits, ctc_mode, num_classes, seq_length):
+    """Decode ctc logits corresponding to ctc_mode"""
+    if ctc_mode == 'naive':
+        return _greedy_decode_and_collapse(logits,
+            num_classes=num_classes, seq_length=seq_length, use_epsilon=False)
+    elif ctc_mode == 'selective_collapse':
+        return _greedy_decode_and_collapse(logits,
+            num_classes=num_classes, seq_length=seq_length, use_epsilon=True)
+    elif ctc_mode == 'all_collapse':
+        return _greedy_decode_and_collapse(logits,
+            num_classes=num_classes, seq_length=seq_length, use_epsilon=True)

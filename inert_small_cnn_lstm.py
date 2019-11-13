@@ -36,7 +36,7 @@ class Model(tf.keras.Model):
         self.num_lstm = [64, 128]
         self.conv_blocks = []
         for i, num_filters in enumerate(self.num_conv):
-            self.conv_blocks.append(ConvBlock(num_filters, i % 2 == 0, l2_lambda))
+            self.conv_blocks.append(ConvBlock(num_filters, True, l2_lambda))
         self.dense_1 = tf.keras.layers.Dense(
             units=self.num_dense, activation=tf.nn.relu,
             kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
@@ -47,7 +47,7 @@ class Model(tf.keras.Model):
                 units=num_units, return_sequences=True,
                 kernel_regularizer=tf.keras.regularizers.l2(l2_lambda)))
         self.dense_2 = tf.keras.layers.Dense(
-            units=num_classes + 1,
+            units=num_classes,
             kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
 
     def __call__(self, inputs, training=False):

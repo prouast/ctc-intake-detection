@@ -7,7 +7,8 @@ from absl import logging
 import tensorflow as tf
 from tensorflow.python.platform import gfile
 from tensorflow import keras
-from ctc import greedy_decode_with_indices
+from ctc import ctc_decode_logits
+from ctc import ctc_loss
 from model_saver import ModelSaver
 import metrics
 import video_small_cnn_lstm
@@ -17,13 +18,13 @@ import lstm
 FRAME_SIZE = 128
 LR_BOUNDARIES = [2, 7, 10]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
-LR_DECAY_RATE = 0.95
+LR_DECAY_RATE = 0.9
 LR_DECAY_STEPS = 1
 FLIP_ACC = [1., -1., 1.]
 FLIP_GYRO = [-1., 1., -1.]
 NUM_CHANNELS = 3
 NUM_CLASSES = 2
-NUM_SHUFFLE = 50000
+NUM_SHUFFLE = 100000
 NUM_TRAINING_FILES = 62
 ORIGINAL_SIZE = 140
 AUTOTUNE = tf.data.experimental.AUTOTUNE
@@ -35,6 +36,9 @@ flags.DEFINE_string(
     name='eval_dir', default='data/raw/eval', help='Directory for val data.')
 flags.DEFINE_integer(
     name='eval_steps', default=250, help='Eval and save best model after every x steps.')
+flags.DEFINE_enum(
+    name='ctc_mode', default="naive", enum_values=["naive", "all_collapse", "selective_collapse"],
+    help='What is the input mode')
 flags.DEFINE_enum(
     name='input_mode', default="video_raw", enum_values=["video_raw", "inert", "video_fc7"],
     help='What is the input mode')
@@ -49,10 +53,8 @@ flags.DEFINE_integer(
 flags.DEFINE_float(
     name='lr_base', default=1e-3, help='Base learning rate.')
 flags.DEFINE_enum(
-    name='lr_decay_fn', default="piecewise_constant", enum_values=["exponential", "piecewise_constant"],
+    name='lr_decay_fn', default="exponential", enum_values=["exponential", "piecewise_constant"],
     help='What is the input mode')
-flags.DEFINE_float(
-    name='lr_decay_rate', default=0.92, help='Rate at which learning rate decays.')
 flags.DEFINE_enum(
     name='mode', default="train_and_evaluate", enum_values=["train_and_evaluate", "predict"],
     help='What mode should tensorflow be started in')
@@ -80,12 +82,13 @@ def run_experiment(arg=None):
     """Run the experiment."""
 
     # Get the model
+    num_classes = NUM_CLASSES if FLAGS.ctc_mode == 'naive' else NUM_CLASSES + 1
     if FLAGS.model == "video_small_cnn_lstm":
-        model = video_small_cnn_lstm.Model(FLAGS.seq_length, NUM_CLASSES, FLAGS.l2_lambda)
+        model = video_small_cnn_lstm.Model(FLAGS.seq_length, num_classes, FLAGS.l2_lambda)
     elif FLAGS.model == "inert_small_cnn_lstm":
-        model = inert_small_cnn_lstm.Model(NUM_CLASSES, FLAGS.l2_lambda)
+        model = inert_small_cnn_lstm.Model(num_classes, FLAGS.l2_lambda)
     elif FLAGS.model == "lstm":
-        model = lstm.Model(NUM_CLASSES, FLAGS.l2_lambda)
+        model = lstm.Model(num_classes, FLAGS.l2_lambda)
 
     # Instantiate learning rate schedule and optimizer
     if FLAGS.lr_decay_fn == "exponential":
@@ -107,6 +110,7 @@ def run_experiment(arg=None):
     train_pre_metric = metrics.Precision(def_val=0, seq_length=seq_length)
     train_rec_metric = metrics.Recall(def_val=0, seq_length=seq_length)
     train_f1_metric = metrics.F1(def_val=0, seq_length=seq_length)
+    eval_tp_fp1_fp2_fn_metric = metrics.TP_FP1_FP2_FN(def_val=0, seq_length=seq_length)
     eval_pre_metric = metrics.Precision(def_val=0, seq_length=seq_length)
     eval_rec_metric = metrics.Recall(def_val=0, seq_length=seq_length)
     eval_f1_metric = metrics.F1(def_val=0, seq_length=seq_length)
@@ -127,43 +131,32 @@ def run_experiment(arg=None):
         logging.info('Starting epoch %d' % (epoch,))
 
         # Iterate over training batches
-        for step, (features, labels) in enumerate(train_dataset):
+        for step, (train_features, train_labels) in enumerate(train_dataset):
 
             # Adjust seq_length and labels
-            labels = adjust_labels(labels, FLAGS.seq_pool, FLAGS.seq_length,
-                FLAGS.batch_size)
+            train_labels = adjust_labels(train_labels, FLAGS.seq_pool,
+                FLAGS.seq_length, FLAGS.batch_size)
 
-            # Training step
-            def train_step(features, labels):
-                # Open a GradientTape to record the operations run during forward pass
-                with tf.GradientTape() as tape:
-                    # Run the forward pass
-                    logits = model(features, training=True)
-                    # Calculate ctc loss from SparseTensor without collapsing labels
-                    seq_lengths = tf.fill([FLAGS.batch_size], seq_length)
-                    loss = tf.compat.v1.nn.ctc_loss(
-                        labels=dense_to_sparse(labels, eos_token=-1),
-                        inputs=logits,
-                        sequence_length=seq_lengths,
-                        preprocess_collapse_repeated=True,
-                        ctc_merge_repeated=False,
-                        time_major=False)
-                        # Reduce loss to scalar
-                    loss = tf.reduce_mean(loss)
-                    # Retrieve gradient with gradient tape
-                    grads = tape.gradient(loss, model.trainable_weights)
-                # Apply the gradients
-                optimizer.apply_gradients(zip(grads, model.trainable_weights))
-                return logits, loss
-            logits, loss = train_step(features, labels)
+            # Open a GradientTape to record the operations run during forward pass
+            with tf.GradientTape() as tape:
+                # Run the forward pass
+                train_logits = model(train_features, training=True)
+                # The loss function
+                train_loss = ctc_loss(train_labels, train_logits,
+                    ctc_mode=FLAGS.ctc_mode, batch_size=FLAGS.batch_size,
+                    seq_length=seq_length, def_val=0, pad_val=-1)
+                grads = tape.gradient(train_loss, model.trainable_weights)
+            # Apply the gradients
+            optimizer.apply_gradients(zip(grads, model.trainable_weights))
 
             # Decode logits into predictions
-            predictions, _ = greedy_decode_with_indices(logits, NUM_CLASSES, seq_length)
+            train_predictions, decoded = ctc_decode_logits(train_logits,
+                ctc_mode=FLAGS.ctc_mode, num_classes=num_classes, seq_length=seq_length)
 
             # Update metrics
-            train_pre_metric(labels, predictions)
-            train_rec_metric(labels, predictions)
-            train_f1_metric(labels, predictions)
+            train_pre_metric(train_labels, train_predictions)
+            train_rec_metric(train_labels, train_predictions)
+            train_f1_metric(train_labels, train_predictions)
 
             # Log every FLAGS.log_steps steps.
             if global_step % FLAGS.log_steps == 0:
@@ -174,7 +167,7 @@ def run_experiment(arg=None):
                 # Console
                 logging.info('Step %s in epoch %s; global step %s' % (step, epoch, global_step))
                 logging.info('Seen this epoch: %s samples' % ((step + 1) * FLAGS.batch_size))
-                logging.info('Training loss (this step): %s' % float(loss))
+                logging.info('Training loss (this step): %s' % float(train_loss))
                 logging.info('Training precision (this step): %s' % (float(train_pre),))
                 logging.info('Training recall (this step): %s' % (float(train_rec),))
                 logging.info('Training f1 (this step): %s' % (float(train_f1),))
@@ -183,7 +176,7 @@ def run_experiment(arg=None):
                     tf.summary.scalar('metrics/precision', data=train_pre, step=global_step)
                     tf.summary.scalar('metrics/recall', data=train_rec, step=global_step)
                     tf.summary.scalar('metrics/f1', data=train_f1, step=global_step)
-                    tf.summary.scalar('training/loss', data=loss, step=global_step)
+                    tf.summary.scalar('training/loss', data=train_loss, step=global_step)
                     tf.summary.scalar('training/learning_rate', data=lr_schedule(epoch), step=global_step)
                 train_pre_metric.reset_states()
                 train_rec_metric.reset_states()
@@ -204,34 +197,27 @@ def run_experiment(arg=None):
                     eval_labels = adjust_labels(eval_labels, FLAGS.seq_pool,
                         FLAGS.seq_length, FLAGS.batch_size)
 
-                    def eval_step(features, labels):
-                        # Run the forward pass
-                        logits = model(features, training=False)
-                        # Calculate ctc loss from SparseTensor without collapsing labels
-                        seq_lengths = tf.fill([FLAGS.batch_size], seq_length)
-                        loss = tf.compat.v1.nn.ctc_loss(
-                            labels=dense_to_sparse(eval_labels, eos_token=-1),
-                            inputs=logits,
-                            sequence_length=seq_lengths,
-                            preprocess_collapse_repeated=True,
-                            ctc_merge_repeated=False,
-                            time_major=False)
-                        # Reduce loss to scalar
-                        loss = tf.reduce_mean(loss)
-                        return logits, loss
-                    eval_logits, eval_loss = eval_step(eval_features, eval_labels)
+                    # Run the forward pass
+                    eval_logits = model(eval_features, training=False)
+                    # The loss function
+                    eval_loss = ctc_loss(eval_labels, eval_logits, ctc_mode=FLAGS.ctc_mode,
+                            batch_size=FLAGS.batch_size, seq_length=seq_length,
+                            def_val=0, pad_val=-1)
                     eval_losses.append(eval_loss.numpy())
 
                     # Decode logits into predictions
-                    eval_predictions, _ = greedy_decode_with_indices(
-                        eval_logits, NUM_CLASSES, seq_length)
+                    eval_predictions, decoded = ctc_decode_logits(eval_logits,
+                        ctc_mode=FLAGS.ctc_mode, num_classes=num_classes,
+                        seq_length=seq_length)
 
                     # Calculate metric
+                    eval_tp_fp1_fp2_fn_metric(eval_labels, eval_predictions)
                     eval_pre_metric(eval_labels, eval_predictions)
                     eval_rec_metric(eval_labels, eval_predictions)
                     eval_f1_metric(eval_labels, eval_predictions)
 
                 # Get metrics
+                eval_tp, eval_fp1, eval_fp2, eval_fn = eval_tp_fp1_fp2_fn_metric.result()
                 eval_pre = eval_pre_metric.result()
                 eval_rec = eval_rec_metric.result()
                 eval_f1 = eval_f1_metric.result()
@@ -239,12 +225,18 @@ def run_experiment(arg=None):
 
                 # Console
                 logging.info('Evaluation loss: %s' % float(eval_loss))
+                logging.info('Evaluation tp: %s, fp1: %s, fp2: %s, fn: %s' %
+                    (int(eval_tp), int(eval_fp1), int(eval_fp2), int(eval_fn)))
                 logging.info('Evaluation precision: %s' % (float(eval_pre),))
                 logging.info('Evaluation recall: %s' % (float(eval_rec),))
                 logging.info('Evaluation f1: %s' % (float(eval_f1),))
 
                 # TensorBoard
                 with eval_writer.as_default():
+                    tf.summary.scalar('metrics/tp', data=eval_tp, step=global_step)
+                    tf.summary.scalar('metrics/fp_1', data=eval_fp1, step=global_step)
+                    tf.summary.scalar('metrics/fp_2', data=eval_fp2, step=global_step)
+                    tf.summary.scalar('metrics/fn', data=eval_fn, step=global_step)
                     tf.summary.scalar('metrics/precision', data=eval_pre, step=global_step)
                     tf.summary.scalar('metrics/recall', data=eval_rec, step=global_step)
                     tf.summary.scalar('metrics/f1', data=eval_f1, step=global_step)
@@ -252,6 +244,7 @@ def run_experiment(arg=None):
                 eval_writer.flush()
 
                 # Reset eval metric states after evaluation
+                eval_tp_fp1_fp2_fn_metric.reset_states()
                 eval_pre_metric.reset_states()
                 eval_rec_metric.reset_states()
                 eval_f1_metric.reset_states()
@@ -290,14 +283,6 @@ class Adam(keras.optimizers.Adam):
     def finish_epoch(self):
         """Increment epoch count"""
         return self._epochs.assign_add(1)
-
-def dense_to_sparse(input, eos_token=0):
-    """Convert dense tensor to sparse"""
-    idx = tf.where(tf.not_equal(input, tf.constant(eos_token, input.dtype)))
-    values = tf.gather_nd(input, idx)
-    shape = tf.shape(input, out_type=tf.int64)
-    sparse = tf.SparseTensor(idx, values, shape)
-    return sparse
 
 def adjust_labels(labels, seq_pool, seq_length, batch_size):
     """If seq_pool performed, adjust seq_length and labels by slicing"""

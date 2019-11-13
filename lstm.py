@@ -14,7 +14,7 @@ class Model(tf.keras.Model):
                     units=num_units, return_sequences=True,
                     kernel_regularizer=tf.keras.regularizers.l2(l2_lambda)))
         self.dense = tf.keras.layers.Dense(
-            units=num_classes + 1,
+            units=num_classes,
             kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
         self.dropout = tf.keras.layers.Dropout(rate=0.5)
 

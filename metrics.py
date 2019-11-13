@@ -24,11 +24,12 @@ def evaluate_interval_detection(labels, predictions, def_val, seq_length):
     Returns:
         tp: True positives (number of true sequences of 1s predicted with at
                 least one predicting 1)
+        fp_1: False positives type 1 (number of excess predicting 1s matching
+                a true sequence of 1s in excess)
+        fp_2: False positives type 1 (number number of predicting 1s not
+                matching a true sequence of 1s)
         fn: False negatives (number of true sequences of 1s not matched by at
                 least one predicting 1)
-        fp: False positives (number of excess predicting 1s matching a true
-                sequence of 1s in excess + number of predicting 1s not matching
-                a true sequence of 1s)
     """
     def sequence_masks(labels, def_val, seq_length):
         """Generate masks [batch, max_seq_count, seq_length] of all event sequences"""
@@ -133,16 +134,49 @@ def evaluate_interval_detection(labels, predictions, def_val, seq_length):
     # Calculate true positive, false positive and false negative count
     tp = tf.reduce_sum(tf.map_fn(lambda count: tf.cond(count > 0, lambda: 1, lambda: 0), pred_sums))
     fn = tf.reduce_sum(tf.map_fn(lambda count: tf.cond(count > 0, lambda: 0, lambda: 1), pred_sums))
-    fp = tf.cond(empty,
+    fp_1 = tf.cond(empty,
         lambda: 0,
         lambda: tf.reduce_sum(tf.map_fn(lambda count: tf.cond(count > 1, lambda: count-1, lambda: 0), pred_sums)))
-    fp += tf.reduce_sum(tf.boolean_mask(predictions, mask=neg_mask))
+    fp_2 = tf.reduce_sum(tf.boolean_mask(predictions, mask=neg_mask))
 
     tp = tf.cast(tp, tf.float32)
+    fp_1 = tf.cast(fp_1, tf.float32)
+    fp_2 = tf.cast(fp_2, tf.float32)
     fn = tf.cast(fn, tf.float32)
-    fp = tf.cast(fp, tf.float32)
 
-    return tp, fn, fp
+    return tp, fp_1, fp_2, fn
+
+class TP_FP1_FP2_FN(tf.keras.metrics.Metric):
+    def __init__(self, def_val, seq_length, name=None, dtype=None):
+        super(TP_FP1_FP2_FN, self).__init__(name=name, dtype=dtype)
+        self.seq_length = seq_length
+        self.def_val = def_val
+        self.total_tp = self.add_weight('total_tp',
+            shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
+        self.total_fp_1 = self.add_weight('total_fp_1',
+            shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
+        self.total_fp_2 = self.add_weight('total_fp_2',
+            shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
+        self.total_fn = self.add_weight('total_fn',
+            shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
+
+    def update_state(self, y_true, y_pred):
+        tp, fp_1, fp_2, fn = evaluate_interval_detection(
+            labels=y_true, predictions=y_pred,
+            def_val=self.def_val, seq_length=self.seq_length)
+        self.total_tp.assign_add(tp)
+        self.total_fp_1.assign_add(fp_1)
+        self.total_fp_2.assign_add(fp_2)
+        self.total_fn.assign_add(fn)
+
+    def result(self):
+        return self.total_tp, self.total_fp_1, self.total_fp_2, self.total_fn
+
+    def reset_states(self):
+        self.total_tp.assign(0)
+        self.total_fp_1.assign(0)
+        self.total_fp_2.assign(0)
+        self.total_fn.assign(0)
 
 class Precision(tf.keras.metrics.Metric):
     def __init__(self, def_val, seq_length, name=None, dtype=None):
@@ -155,11 +189,12 @@ class Precision(tf.keras.metrics.Metric):
             shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
 
     def update_state(self, y_true, y_pred):
-        tp, _, fp = evaluate_interval_detection(
+        tp, fp_1, fp_2, _ = evaluate_interval_detection(
             labels=y_true, predictions=y_pred,
             def_val=self.def_val, seq_length=self.seq_length)
         self.total_tp.assign_add(tp)
-        self.total_fp.assign_add(fp)
+        self.total_fp.assign_add(fp_1)
+        self.total_fp.assign_add(fp_2)
 
     def result(self):
         return tf.math.divide_no_nan(
@@ -181,7 +216,7 @@ class Recall(tf.keras.metrics.Metric):
             shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
 
     def update_state(self, y_true, y_pred):
-        tp, fn, _ = evaluate_interval_detection(
+        tp, _, _, fn = evaluate_interval_detection(
             labels=y_true, predictions=y_pred,
             def_val=self.def_val, seq_length=self.seq_length)
         self.total_tp.assign_add(tp)
@@ -209,12 +244,13 @@ class F1(tf.keras.metrics.Metric):
             shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
 
     def update_state(self, y_true, y_pred):
-        tp, fn, fp = evaluate_interval_detection(
+        tp, fp_1, fp_2, fn = evaluate_interval_detection(
             labels=y_true, predictions=y_pred,
             def_val=self.def_val, seq_length=self.seq_length)
         self.total_tp.assign_add(tp)
+        self.total_fp.assign_add(fp_1)
+        self.total_fp.assign_add(fp_2)
         self.total_fn.assign_add(fn)
-        self.total_fp.assign_add(fp)
 
     def result(self):
         pre = tf.math.divide_no_nan(
