@@ -7,8 +7,8 @@ from absl import logging
 import tensorflow as tf
 from tensorflow.python.platform import gfile
 from tensorflow import keras
-from ctc import ctc_decode_logits
-from ctc import ctc_loss
+from ctc import decode_logits
+from ctc import loss
 from model_saver import ModelSaver
 import metrics
 import video_small_cnn_lstm
@@ -18,13 +18,13 @@ import lstm
 FRAME_SIZE = 128
 LR_BOUNDARIES = [2, 7, 10]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
-LR_DECAY_RATE = 0.9
+LR_DECAY_RATE = 0.5
 LR_DECAY_STEPS = 1
 FLIP_ACC = [1., -1., 1.]
 FLIP_GYRO = [-1., 1., -1.]
 NUM_CHANNELS = 3
 NUM_CLASSES = 2
-NUM_SHUFFLE = 100000
+NUM_SHUFFLE = 10000
 NUM_TRAINING_FILES = 62
 ORIGINAL_SIZE = 140
 AUTOTUNE = tf.data.experimental.AUTOTUNE
@@ -37,9 +37,6 @@ flags.DEFINE_string(
 flags.DEFINE_integer(
     name='eval_steps', default=250, help='Eval and save best model after every x steps.')
 flags.DEFINE_enum(
-    name='ctc_mode', default="naive", enum_values=["naive", "all_collapse", "selective_collapse"],
-    help='What is the input mode')
-flags.DEFINE_enum(
     name='input_mode', default="video_raw", enum_values=["video_raw", "inert", "video_fc7"],
     help='What is the input mode')
 flags.DEFINE_integer(
@@ -50,6 +47,9 @@ flags.DEFINE_float(
     name='l2_lambda', default=1e-3, help='l2 regularization lambda.')
 flags.DEFINE_integer(
     name='log_steps', default=100, help='Log after every x steps.')
+flags.DEFINE_enum(
+    name='loss_mode', default="naive_def_none", enum_values=["ctc_def_all", "ctc_def_event", "ctc_ndef_all", "naive_def_none", "naive_def_event", "cross_def_none"],
+    help='What is the input mode')
 flags.DEFINE_float(
     name='lr_base', default=1e-3, help='Base learning rate.')
 flags.DEFINE_enum(
@@ -82,7 +82,7 @@ def run_experiment(arg=None):
     """Run the experiment."""
 
     # Get the model
-    num_classes = NUM_CLASSES if FLAGS.ctc_mode == 'naive' else NUM_CLASSES + 1
+    num_classes = NUM_CLASSES + 1 if 'ctc_def' in FLAGS.loss_mode else NUM_CLASSES
     if FLAGS.model == "video_small_cnn_lstm":
         model = video_small_cnn_lstm.Model(FLAGS.seq_length, num_classes, FLAGS.l2_lambda)
     elif FLAGS.model == "inert_small_cnn_lstm":
@@ -142,16 +142,16 @@ def run_experiment(arg=None):
                 # Run the forward pass
                 train_logits = model(train_features, training=True)
                 # The loss function
-                train_loss = ctc_loss(train_labels, train_logits,
-                    ctc_mode=FLAGS.ctc_mode, batch_size=FLAGS.batch_size,
+                train_loss = loss(train_labels, train_logits,
+                    loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
                     seq_length=seq_length, def_val=0, pad_val=-1)
                 grads = tape.gradient(train_loss, model.trainable_weights)
             # Apply the gradients
             optimizer.apply_gradients(zip(grads, model.trainable_weights))
 
             # Decode logits into predictions
-            train_predictions, decoded = ctc_decode_logits(train_logits,
-                ctc_mode=FLAGS.ctc_mode, num_classes=num_classes, seq_length=seq_length)
+            train_predictions, decoded = decode_logits(train_logits,
+                loss_mode=FLAGS.loss_mode, num_classes=num_classes, seq_length=seq_length)
 
             # Update metrics
             train_pre_metric(train_labels, train_predictions)
@@ -200,14 +200,14 @@ def run_experiment(arg=None):
                     # Run the forward pass
                     eval_logits = model(eval_features, training=False)
                     # The loss function
-                    eval_loss = ctc_loss(eval_labels, eval_logits, ctc_mode=FLAGS.ctc_mode,
+                    eval_loss = loss(eval_labels, eval_logits, loss_mode=FLAGS.loss_mode,
                             batch_size=FLAGS.batch_size, seq_length=seq_length,
                             def_val=0, pad_val=-1)
                     eval_losses.append(eval_loss.numpy())
 
                     # Decode logits into predictions
-                    eval_predictions, decoded = ctc_decode_logits(eval_logits,
-                        ctc_mode=FLAGS.ctc_mode, num_classes=num_classes,
+                    eval_predictions, decoded = decode_logits(eval_logits,
+                        loss_mode=FLAGS.loss_mode, num_classes=num_classes,
                         seq_length=seq_length)
 
                     # Calculate metric
