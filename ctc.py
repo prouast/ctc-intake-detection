@@ -2,6 +2,7 @@
 
 import tensorflow as tf
 import collections
+from absl import logging
 
 NEG_INF = -float("inf")
 
@@ -330,7 +331,7 @@ def _greedy_decode(inputs, num_event, use_def, use_epsilon, seq_length, def_val=
     Returns:
         decoded: The decoded sequence [seq_length]
     """
-    decoded = tf.cast(tf.argmax(inputs, axis=2), tf.int32)
+    decoded = tf.cast(tf.argmax(inputs, axis=-1), tf.int32)
     if not use_def:
         decoded = tf.add(decoded, 1)
     if use_epsilon:
@@ -358,10 +359,10 @@ class Beam:
         self.bu_seq_nb_cand = [(NEG_INF, self.bu_seq_nb)] # list of bu_seq_nb merging candidates for current step with probabilities
         self.bu_seq_b_cand = [(NEG_INF, self.bu_seq_b)] # list of bu_seq_nb merging candidates for current step with probabilities
     def __str__(self):
-        return  "Beam [p_b = %s, p_nb = %s, seq = %s, bu_seq_b = %s, bu_seq_nb = %s]" \
-            % (self.p_b, self.p_nb, self.seq, self.bu_seq_b, self.bu_seq_nb)
+        return  "Beam [seq = %s, p_b = %s, p_nb = %s, bu_seq_b = %s, bu_seq_nb = %s]" \
+            % (self.seq, self.p_b, self.p_nb, self.bu_seq_b, self.bu_seq_nb)
     def get_p(self):
-        return self.p_b + self.p_nb
+        return tf.reduce_logsumexp([self.p_b, self.p_nb])
 
 # TODO: Write efficient tf graph version
 def _ctc_decode(inputs, beam_width=10, def_val=-1):
@@ -374,7 +375,8 @@ def _ctc_decode(inputs, beam_width=10, def_val=-1):
 
     # For each sequence step
     for t in range(seq_length):
-
+        if t % 100 == 0:
+            logging.info("CTC inference step {0}...".format(t))
         def _make_new_beams():
           fn = lambda : Beam(NEG_INF, NEG_INF, [])
           return collections.defaultdict(fn)
@@ -389,17 +391,13 @@ def _ctc_decode(inputs, beam_width=10, def_val=-1):
 
             # A. 1) Case of non-empty beam with repeated last event
             if tf.size(beam.seq) > 0:
-                #p_nb = beam.p_nb * inputs[t, beam.seq[-1]]
-                #new_beam.p_nb += p_nb
                 new_beam.p_nb = tf.reduce_logsumexp([new_beam.p_nb,
                     beam.p_nb + inputs[t, beam.seq[-1]]])
                 new_beam.bu_seq_nb_cand.append((
                     tf.reduce_logsumexp([beam.p_nb + inputs[t, beam.seq[-1]]]),
                     tf.concat([beam.bu_seq_nb, [beam.seq[-1]]], 0)))
 
-            # A. 2) Case of beam ending in a blank event
-            #p_b = (beam.p_b + beam.p_nb) * inputs[t, blank]
-            #new_beam.p_b += p_b
+            # A. 2) Case of adding a blank event
             new_beam.p_b = tf.reduce_logsumexp([new_beam.p_b,
                 beam.p_b + inputs[t, blank], beam.p_nb + inputs[t, blank]])
             new_beam.bu_seq_b_cand.append((
@@ -420,24 +418,21 @@ def _ctc_decode(inputs, beam_width=10, def_val=-1):
                 # B. 1) Case of repeated event at the end in prefix
                 if tf.size(beam.seq) > 0 and beam.seq[-1] == event:
                     # Only consider seqs ending with blank event
-                    #p_nb = beam.p_b * inputs[t, event]
                     new_beam.p_nb = tf.reduce_logsumexp([new_beam.p_nb,
                         beam.p_b + inputs[t, event]])
                     new_beam.bu_seq_nb_cand.append((
                         tf.reduce_logsumexp([beam.p_b + inputs[t, event]]),
                         tf.concat([beam.bu_seq_b, [event]], 0)))
                 # B. 2) Case of no repeated event
-                else:
-                    #p_nb = (beam.p_b + beam.p_nb) * inputs[t, event]
+                else: ## TODO thteres something wrong here! ttry running examples
                     new_beam.p_nb = tf.reduce_logsumexp([new_beam.p_nb,
                         beam.p_b + inputs[t, event], beam.p_nb + inputs[t, event]])
                     new_beam.bu_seq_nb_cand.append((
                         tf.reduce_logsumexp([beam.p_b + inputs[t, event]]),
-                        tf.concat([beam.bu_seq_nb, [event]], 0)))
-                    new_beam.bu_seq_nb_cand.append((
-                        tf.reduce_logsumexp([beam.p_nb * inputs[t, event]]),
                         tf.concat([beam.bu_seq_b, [event]], 0)))
-                #new_beam.p_nb += p_nb
+                    new_beam.bu_seq_nb_cand.append((
+                        tf.reduce_logsumexp([beam.p_nb + inputs[t, event]]),
+                        tf.concat([beam.bu_seq_nb, [event]], 0)))
 
         # Sort and trim the beam at the end of each sequence step
         beams = sorted(new_beams.values(),
@@ -461,9 +456,14 @@ def _ctc_decode(inputs, beam_width=10, def_val=-1):
 
 #@tf.function
 def _ctc_decode_batch(inputs, beam_width, seq_length, def_val=0, pad_val=-1):
+    # Add empty batch dimension if needed
+    if tf.size(tf.shape(inputs)) == 2:
+        inputs = tf.expand_dims(inputs, 0)
+    # Decode each example
     decoded, seq = tf.map_fn(
         fn=lambda x: _ctc_decode(x, beam_width=beam_width, def_val=-1),
         elems=inputs, dtype=(tf.int32, tf.int32))
+    # Collapse sequences in case there are any
     collapsed, _ = _collapse_sequences(decoded, seq_length, def_val=0,
         pad_val=-1, mode='replace_collapsed', pos='middle')
     return collapsed, seq
@@ -478,9 +478,9 @@ def decode_logits(logits, loss_mode, num_event, use_def, use_epsilon, seq_length
         return _greedy_decode_and_collapse(logits, num_event=num_event,
             use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
     elif loss_mode == 'ctc_ndef_all':
-        #return _ctc_decode_batch(logits, beam_width=3, seq_length=seq_length)
-        return _greedy_decode_and_collapse(logits, num_event=num_event,
-            use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
+        return _ctc_decode_batch(logits, beam_width=5, seq_length=seq_length)
+        #return _greedy_decode_and_collapse(logits, num_event=num_event,
+        #    use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
     elif loss_mode == 'naive_def_none':
         return _greedy_decode_and_collapse(logits, num_event=num_event,
             use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)

@@ -78,7 +78,13 @@ flags.DEFINE_integer(
 
 logging.set_verbosity(logging.INFO)
 
-def run_experiment(arg=None):
+def main(arg=None):
+    if FLAGS.mode == 'train_and_evaluate':
+        train_and_evaluate()
+    elif FLAGS.mode == 'predict':
+        predict()
+
+def train_and_evaluate():
     """Run the experiment."""
 
     # Get the model
@@ -104,8 +110,8 @@ def run_experiment(arg=None):
     optimizer = Adam(learning_rate=lr_schedule)
 
     # Get the datasets
-    train_dataset = dataset(is_training=True, data_dir=FLAGS.train_dir)
-    eval_dataset = dataset(is_training=False, data_dir=FLAGS.eval_dir)
+    train_dataset = dataset(is_training=True, is_predicting=False, data_dir=FLAGS.train_dir)
+    eval_dataset = dataset(is_training=False, is_predicting=False, data_dir=FLAGS.eval_dir)
 
     # Instantiate the metrics
     seq_length = int(FLAGS.seq_length / FLAGS.seq_pool)
@@ -136,7 +142,7 @@ def run_experiment(arg=None):
         for step, (train_features, train_labels) in enumerate(train_dataset):
 
             # Adjust seq_length and labels
-            train_labels = adjust_labels(train_labels, FLAGS.seq_pool,
+            train_labels = _adjust_labels(train_labels, FLAGS.seq_pool,
                 FLAGS.seq_length, FLAGS.batch_size)
 
             # Open a GradientTape to record the operations run during forward pass
@@ -197,7 +203,7 @@ def run_experiment(arg=None):
                 for i, (eval_features, eval_labels) in enumerate(eval_dataset):
 
                     # Adjust seq_length and labels
-                    eval_labels = adjust_labels(eval_labels, FLAGS.seq_pool,
+                    eval_labels = _adjust_labels(eval_labels, FLAGS.seq_pool,
                         FLAGS.seq_length, FLAGS.batch_size)
 
                     # Run the forward pass
@@ -287,7 +293,7 @@ class Adam(keras.optimizers.Adam):
         """Increment epoch count"""
         return self._epochs.assign_add(1)
 
-def adjust_labels(labels, seq_pool, seq_length, batch_size):
+def _adjust_labels(labels, seq_pool, seq_length, batch_size):
     """If seq_pool performed, adjust seq_length and labels by slicing"""
     if seq_pool > 1:
         labels = tf.strided_slice(
@@ -296,10 +302,72 @@ def adjust_labels(labels, seq_pool, seq_length, batch_size):
     labels = tf.reshape(labels, [batch_size, int(seq_length/seq_pool)])
     return labels
 
-def dataset(is_training, data_dir):
+def predict():
+    # Get the model
+    use_def = 'ndef' not in FLAGS.loss_mode
+    use_epsilon = 'ctc' in FLAGS.loss_mode
+    num_classes = NUM_EVENT_CLASSES + (1 if use_def else 0) + (1 if use_epsilon else 0)
+    if FLAGS.model == "video_small_cnn_lstm":
+        model = video_small_cnn_lstm.Model(FLAGS.seq_length, num_classes, FLAGS.l2_lambda)
+    elif FLAGS.model == "inert_small_cnn_lstm":
+        model = inert_small_cnn_lstm.Model(num_classes, FLAGS.l2_lambda)
+    elif FLAGS.model == "lstm":
+        model = lstm.Model(num_classes, FLAGS.l2_lambda)
+    # Load weights
+    model.load_weights(FLAGS.model_dir)
+    # Instantiate the metrics
+    seq_length = int(FLAGS.seq_length / FLAGS.seq_pool)
+    eval_tp_fp1_fp2_fn_metric = metrics.TP_FP1_FP2_FN(def_val=0, seq_length=seq_length)
+    eval_pre_metric = metrics.Precision(def_val=0, seq_length=seq_length)
+    eval_rec_metric = metrics.Recall(def_val=0, seq_length=seq_length)
+    eval_f1_metric = metrics.F1(def_val=0, seq_length=seq_length)
+    # Keep track of eval losses
+    eval_losses = []
+    # Files for evaluation
+    filenames = gfile.Glob(os.path.join(FLAGS.eval_dir, "*.tfrecords"))
+    # For each filename, export logits
+    for filename in filenames:
+        logging.info("Working on {0}.".format(filename))
+        # Get the dataset
+        eval_dataset = dataset(is_training=False, is_predicting=True, data_dir=filename)
+        # Iterate through eval batches
+        logits = []; batch_predictions = []; labels = []
+        for i, (eval_features, eval_labels) in enumerate(eval_dataset):
+            # Adjust seq_length and labels
+            eval_labels = _adjust_labels(eval_labels, FLAGS.seq_pool,
+                FLAGS.seq_length, FLAGS.batch_size)
+            # Run the forward pass
+            eval_logits = model(eval_features, training=False)
+            # Decode logits into predictions
+            eval_predictions, decoded = decode_logits(eval_logits,
+                loss_mode='ctc_def_all', num_event=NUM_EVENT_CLASSES,
+                use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
+            eval_labels = tf.reshape(eval_labels, [-1])
+            eval_logits = tf.reshape(eval_logits, [-1, num_classes])
+            eval_predictions = tf.reshape(eval_predictions, [-1])
+            # Collect results
+            labels.extend(eval_labels.numpy().tolist())
+            logits.extend(eval_logits.numpy().tolist())
+            batch_predictions.extend(eval_predictions.numpy().tolist())
+        # Predict on video level
+        video_predictions, _ = decode_logits(tf.convert_to_tensor(logits),
+            loss_mode=FLAGS.loss_mode, num_event=NUM_EVENT_CLASSES,
+            use_def=use_def, use_epsilon=use_epsilon, seq_length=len(logits))
+        video_predictions = tf.reshape(video_predictions, [-1]).numpy().tolist()
+        video_id = os.path.splitext(os.path.basename(filename))[0]
+        ids = [video_id] * len(logits)
+        logging.info("Writing {0} examples to {1}.csv...".format(len(ids), video_id))
+        save_array = np.column_stack((ids, labels, logits, batch_predictions,
+            video_predictions))
+        np.savetxt("{0}.csv".format(video_id), save_array, delimiter=",", fmt='%s')
+
+def dataset(is_training, is_predicting, data_dir):
     """Input pipeline"""
     # Scan for training files
-    filenames = gfile.Glob(os.path.join(data_dir, "*.tfrecords"))
+    if is_training:
+        filenames = gfile.Glob(os.path.join(data_dir, "*.tfrecords"))
+    elif is_predicting:
+        filenames = [data_dir]
     if not filenames:
         raise RuntimeError('No files found.')
     logging.info("Found {0} files.".format(str(len(filenames))))
@@ -491,4 +559,4 @@ def _get_transformation_parser(is_training):
 
 # Run
 if __name__ == "__main__":
-    app.run(main=run_experiment)
+    app.run(main=main)
