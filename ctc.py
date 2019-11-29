@@ -316,32 +316,35 @@ def loss(labels, logits, loss_mode, batch_size, seq_length, def_val, pad_val, po
 ##### Decoding
 
 @tf.function
-def _greedy_decode(inputs, num_classes, seq_length, use_epsilon, def_val=0):
+def _greedy_decode(inputs, num_event, use_def, use_epsilon, seq_length, def_val=0):
     """Naive inference by retrieving most likely output at each time-step.
 
     Args:
         inputs: The prediction in form of logits. [batch_size, time_steps, num_classes]
-        num_classes: The number of classes considered in prediction.
-        seq_length: Sequence length for each item in inputs.
-        use_epsilon: If yes, contains an extra class for CTC epsilon at the last index.
+        num_event: The number of classes representing events considered in prediction.
+        use_def: If 1, first index represents the default event
+        use_epsilon: If 1, contains an extra class for CTC epsilon at the last index.
             At any indices where epsilon has the largest logit, it will be replaced with def_val.
+        seq_length: Sequence length for each item in inputs.
         def_val: How should predictions (excluding 0) be collapsed to 0?
     Returns:
         decoded: The decoded sequence [seq_length]
     """
     decoded = tf.cast(tf.argmax(inputs, axis=2), tf.int32)
+    if not use_def:
+        decoded = tf.add(decoded, 1)
     if use_epsilon:
-        decoded = tf.where(tf.equal(decoded, num_classes-1),
+        decoded = tf.where(tf.equal(decoded, num_event + 1),
             tf.fill([seq_length], def_val), decoded) # Set epsilons to def_val
     return decoded
 
 @tf.function
-def _greedy_decode_and_collapse(inputs, num_classes, seq_length, use_epsilon=True, def_val=0, pad_val=-1, pos='middle'):
+def _greedy_decode_and_collapse(inputs, num_event, use_def, use_epsilon, seq_length, def_val=0, pad_val=-1, pos='middle'):
     """Retrieve most likely output at each time-step and collapse predictions."""
-    decoded = _greedy_decode(inputs, num_classes=num_classes,
-        seq_length=seq_length, use_epsilon=use_epsilon, def_val=def_val)
+    decoded = _greedy_decode(inputs, num_event=num_event, use_def=use_def,
+        use_epsilon=use_epsilon, seq_length=seq_length, def_val=def_val)
     collapsed, _ = _collapse_sequences(decoded, seq_length, def_val=def_val,
-        pad_val=pad_val, replace_with_def=True, pos=pos)
+        pad_val=pad_val, mode='replace_collapsed', pos=pos)
     # Return collapsed output and indices of ones
     return collapsed, decoded
 
@@ -457,26 +460,30 @@ def _ctc_decode(inputs, beam_width=10, def_val=-1):
     return bu_seq, seq
 
 #@tf.function
-def _ctc_decode_batch(inputs, beam_width, def_val):
-    decoded = tf.map_fn(
-        fn=lambda x: _ctc_decode(x, beam_width=beam_width, def_val=def_val),
+def _ctc_decode_batch(inputs, beam_width, seq_length, def_val=0, pad_val=-1):
+    decoded, seq = tf.map_fn(
+        fn=lambda x: _ctc_decode(x, beam_width=beam_width, def_val=-1),
         elems=inputs, dtype=(tf.int32, tf.int32))
-    return decoded
+    collapsed, _ = _collapse_sequences(decoded, seq_length, def_val=0,
+        pad_val=-1, mode='replace_collapsed', pos='middle')
+    return collapsed, seq
 
-def decode_logits(logits, loss_mode, num_classes, seq_length):
+def decode_logits(logits, loss_mode, num_event, use_def, use_epsilon, seq_length):
     """Decode ctc logits corresponding to loss_mode"""
 
     if loss_mode == 'ctc_def_all':
-        return _greedy_decode_and_collapse(logits, num_classes=num_classes,
-            seq_length=seq_length, use_epsilon=True)
+        return _greedy_decode_and_collapse(logits, num_event=num_event,
+            use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
     elif loss_mode == 'ctc_def_event':
-        return _greedy_decode_and_collapse(logits, num_classes=num_classes,
-            seq_length=seq_length, use_epsilon=True)
+        return _greedy_decode_and_collapse(logits, num_event=num_event,
+            use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
     elif loss_mode == 'ctc_ndef_all':
-        return _ctc_decode_batch(logits, beam_width=10, def_val=-1)
+        #return _ctc_decode_batch(logits, beam_width=3, seq_length=seq_length)
+        return _greedy_decode_and_collapse(logits, num_event=num_event,
+            use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
     elif loss_mode == 'naive_def_none':
-        return _greedy_decode_and_collapse(logits, num_classes=num_classes,
-            seq_length=seq_length, use_epsilon=False)
+        return _greedy_decode_and_collapse(logits, num_event=num_event,
+            use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
     elif loss_mode == 'naive_def_event':
-        return _greedy_decode_and_collapse(logits, num_classes=num_classes,
-            seq_length=seq_length, use_epsilon=False)
+        return _greedy_decode_and_collapse(logits, num_event=num_event,
+            use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)

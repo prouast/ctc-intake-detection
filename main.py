@@ -23,8 +23,8 @@ LR_DECAY_STEPS = 1
 FLIP_ACC = [1., -1., 1.]
 FLIP_GYRO = [-1., 1., -1.]
 NUM_CHANNELS = 3
-NUM_CLASSES = 2
-NUM_SHUFFLE = 10000
+NUM_EVENT_CLASSES = 1
+NUM_SHUFFLE = 100000
 NUM_TRAINING_FILES = 62
 ORIGINAL_SIZE = 140
 AUTOTUNE = tf.data.experimental.AUTOTUNE
@@ -82,7 +82,9 @@ def run_experiment(arg=None):
     """Run the experiment."""
 
     # Get the model
-    num_classes = NUM_CLASSES + 1 if 'ctc_def' in FLAGS.loss_mode else NUM_CLASSES
+    use_def = 'ndef' not in FLAGS.loss_mode
+    use_epsilon = 'ctc' in FLAGS.loss_mode
+    num_classes = NUM_EVENT_CLASSES + (1 if use_def else 0) + (1 if use_epsilon else 0)
     if FLAGS.model == "video_small_cnn_lstm":
         model = video_small_cnn_lstm.Model(FLAGS.seq_length, num_classes, FLAGS.l2_lambda)
     elif FLAGS.model == "inert_small_cnn_lstm":
@@ -151,7 +153,8 @@ def run_experiment(arg=None):
 
             # Decode logits into predictions
             train_predictions, decoded = decode_logits(train_logits,
-                loss_mode=FLAGS.loss_mode, num_classes=num_classes, seq_length=seq_length)
+                loss_mode=FLAGS.loss_mode, num_event=NUM_EVENT_CLASSES,
+                use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
 
             # Update metrics
             train_pre_metric(train_labels, train_predictions)
@@ -207,8 +210,8 @@ def run_experiment(arg=None):
 
                     # Decode logits into predictions
                     eval_predictions, decoded = decode_logits(eval_logits,
-                        loss_mode=FLAGS.loss_mode, num_classes=num_classes,
-                        seq_length=seq_length)
+                        loss_mode=FLAGS.loss_mode, num_event=NUM_EVENT_CLASSES,
+                        use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
 
                     # Calculate metric
                     eval_tp_fp1_fp2_fn_metric(eval_labels, eval_predictions)
