@@ -4,9 +4,9 @@
 import tensorflow as tf
 
 @tf.function
-def evaluate_interval_detection(labels, predictions, def_val, seq_length):
+def evaluate_interval_detection(labels, predictions, event_val, def_val, seq_length):
     """Evaluate interval detection for sequences by calculating
-        tp, fp, and fn.
+        tp, fp, and fn for given event_val and def_val.
 
     Follows the metric outlined by Kyritsis et al. (2019) in
         Modeling wrist micromovements to measure in-meal eating behavior from
@@ -14,10 +14,12 @@ def evaluate_interval_detection(labels, predictions, def_val, seq_length):
         https://ieeexplore.ieee.org/abstract/document/8606156/
 
     Args:
-        labels: The truth, where 1 means part of the sequence and 0 otherwise.
-            [batch_size, seq_length]
-        predictions: The predictions, where 1 means part of the sequence and 0
-            otherwise. [batch_size, seq_length]
+        labels: The truth, where event_val means part of the sequence, other
+            values otherwise. [batch_size, seq_length]
+        predictions: The predictions, where event_val means part of the
+            sequence and other values otherwise. [batch_size, seq_length]
+        event_val: The value for true events (other values in the sequence
+            will be ignored)
         def_val: The default value for non-events
         seq_length: The sequence length.
 
@@ -31,25 +33,23 @@ def evaluate_interval_detection(labels, predictions, def_val, seq_length):
         fn: False negatives (number of true sequences of 1s not matched by at
                 least one predicting 1)
     """
-    def sequence_masks(labels, def_val, seq_length):
-        """Generate masks [batch, max_seq_count, seq_length] of all event sequences"""
-        # Get dimensions
-        batch_size = labels.get_shape()[0]
+    def sequence_masks(labels, event_val, def_val, batch_size, seq_length):
+        """Generate masks [lanels, max_seq_count, seq_length] for all event sequences in the labels"""
 
-        # Mask elements non-equal to previous elements
-        diff_mask = tf.not_equal(labels[:, 1:], labels[:, :-1])
+        # Mask non-event elements as False and event elements as True
+        event_mask = tf.equal(labels, event_val)
+
+        # Mask elements that are not equal to previous elements
+        diff_mask = tf.not_equal(event_mask[:, 1:], event_mask[:, :-1])
         prev_mask = tf.concat([tf.ones_like(labels[:, :1], tf.bool), diff_mask], axis=1)
         next_mask = tf.concat([diff_mask, tf.ones_like(labels[:, :1], tf.bool)], axis=1)
 
-        # Mask elements that are not def_val
-        not_default_mask = tf.not_equal(labels, tf.fill(tf.shape(labels), def_val))
-
         # Test if there are no sequences
-        empty = tf.equal(tf.reduce_sum(tf.cast(not_default_mask, tf.int32)), 0)
+        empty = tf.equal(tf.reduce_sum(tf.cast(event_mask, tf.int32)), 0)
 
         # Mask sequence starts and ends
-        seq_start_mask = tf.logical_and(prev_mask, not_default_mask)
-        seq_end_mask = tf.logical_and(next_mask, not_default_mask)
+        seq_start_mask = tf.logical_and(prev_mask, event_mask)
+        seq_end_mask = tf.logical_and(next_mask, event_mask)
 
         # Scatter seq_val
         seq_count_per_batch = tf.reduce_sum(tf.cast(seq_start_mask, tf.int32), axis=[1])
@@ -62,6 +62,11 @@ def evaluate_interval_detection(labels, predictions, def_val, seq_length):
             updates=seq_vals,
             shape=tf.shape(seq_val_idx_mask))
         seq_val = tf.reshape(seq_val, [batch_size, max_seq_count])
+
+        # Set elements of seq_val that are not event_val to def_val
+        seq_val = tf.where(
+            tf.not_equal(seq_val, tf.fill(tf.shape(seq_val), event_val)),
+            x=tf.fill(tf.shape(seq_val), def_val), y=seq_val)
 
         # Scatter seq_start
         seq_start_idx = tf.where(seq_start_mask)[:,1]
@@ -80,7 +85,9 @@ def evaluate_interval_detection(labels, predictions, def_val, seq_length):
         seq_end = tf.reshape(seq_end, [batch_size, max_seq_count])
 
         def batch_seq_masks(starts, ends, length, vals, def_val):
+            """Return seq masks for one batch"""
             def seq_mask(start, end, length, val, def_val):
+                """Return one seq mask"""
                 return tf.concat([
                     tf.fill([start], def_val),
                     tf.fill([end-start+1], val),
@@ -102,33 +109,38 @@ def evaluate_interval_detection(labels, predictions, def_val, seq_length):
     # Dimensions
     batch_size = labels.get_shape()[0]
 
-    # Mask of negative ground truth
-    neg_mask = tf.equal(labels, def_val)
+    # Mask of negative ground truth (not equal event_val)
+    neg_mask = tf.not_equal(labels, event_val)
 
     # Compute whether labels are empty (no sequences)
-    pos_length = tf.reduce_sum(labels)
-    empty = tf.cond(tf.equal(pos_length, 0), lambda: True, lambda: False)
+    empty = tf.equal(tf.reduce_sum(tf.cast(tf.logical_not(neg_mask), tf.int32)), 0)
 
-    # Derive positive ground truth mask reshape to [n_gt_seq, seq_length]
-    pos_mask, max_seq_count = sequence_masks(labels, def_val, seq_length)
+    # Derive positive ground truth mask; reshape to [n_gt_seq, seq_length]
+    pos_mask, max_seq_count = sequence_masks(labels, event_val=event_val,
+        def_val=def_val, batch_size=batch_size, seq_length=seq_length)
     pos_mask = tf.reshape(pos_mask, [-1, seq_length])
+
+    # Retain only event_val in predictions
+    predictions = tf.where(
+        tf.not_equal(predictions, tf.fill(tf.shape(predictions), event_val)),
+        x=tf.fill(tf.shape(predictions), def_val), y=predictions)
 
     # Stack predictions accordingly
     pred_stacked = tf.reshape(tf.tile(tf.expand_dims(predictions, axis=1), [1, max_seq_count, 1]), [-1, seq_length])
 
-    # Remove empty masks
-    empty_mask = tf.greater(tf.reduce_sum(pos_mask, axis=1), 0)
-
+    # Remove empty masks and according preds
+    keep_mask = tf.greater(tf.reduce_sum(tf.cast(tf.not_equal(pos_mask, def_val), tf.int32), axis=1), 0)
     pos_mask = tf.cond(empty,
         lambda: pos_mask,
-        lambda: tf.boolean_mask(pos_mask, empty_mask))
+        lambda: tf.boolean_mask(pos_mask, keep_mask))
     pred_stacked = tf.cond(empty,
         lambda: pred_stacked,
-        lambda: tf.boolean_mask(pred_stacked, empty_mask))
+        lambda: tf.boolean_mask(pred_stacked, keep_mask))
 
-    # Calculate number of predictions for pos sequences
+    # Calculate number predictions per pos sequence
+    # Reduce predictions to elements in pos_mask that equal event_val, then count them
     pred_sums = tf.map_fn(
-        fn=lambda x: tf.reduce_sum(tf.boolean_mask(x[0], x[1])),
+        fn=lambda x: tf.reduce_sum(tf.cast(tf.equal(tf.boolean_mask(x[0], tf.equal(x[1], event_val)), event_val), tf.int32)),
         elems=(pred_stacked, pos_mask), dtype=tf.int32)
 
     # Calculate true positive, false positive and false negative count
@@ -147,9 +159,10 @@ def evaluate_interval_detection(labels, predictions, def_val, seq_length):
     return tp, fp_1, fp_2, fn
 
 class TP_FP1_FP2_FN(tf.keras.metrics.Metric):
-    def __init__(self, def_val, seq_length, name=None, dtype=None):
+    def __init__(self, event_val, def_val, seq_length, name=None, dtype=None):
         super(TP_FP1_FP2_FN, self).__init__(name=name, dtype=dtype)
         self.seq_length = seq_length
+        self.event_val = event_val
         self.def_val = def_val
         self.total_tp = self.add_weight('total_tp',
             shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
@@ -162,7 +175,7 @@ class TP_FP1_FP2_FN(tf.keras.metrics.Metric):
 
     def update_state(self, y_true, y_pred):
         tp, fp_1, fp_2, fn = evaluate_interval_detection(
-            labels=y_true, predictions=y_pred,
+            labels=y_true, predictions=y_pred, event_val=self.event_val,
             def_val=self.def_val, seq_length=self.seq_length)
         self.total_tp.assign_add(tp)
         self.total_fp_1.assign_add(fp_1)
@@ -179,9 +192,10 @@ class TP_FP1_FP2_FN(tf.keras.metrics.Metric):
         self.total_fn.assign(0)
 
 class Precision(tf.keras.metrics.Metric):
-    def __init__(self, def_val, seq_length, name=None, dtype=None):
+    def __init__(self, event_val, def_val, seq_length, name=None, dtype=None):
         super(Precision, self).__init__(name=name, dtype=dtype)
         self.seq_length = seq_length
+        self.event_val = event_val
         self.def_val = def_val
         self.total_tp = self.add_weight('total_tp',
             shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
@@ -190,7 +204,7 @@ class Precision(tf.keras.metrics.Metric):
 
     def update_state(self, y_true, y_pred):
         tp, fp_1, fp_2, _ = evaluate_interval_detection(
-            labels=y_true, predictions=y_pred,
+            labels=y_true, predictions=y_pred, event_val=self.event_val,
             def_val=self.def_val, seq_length=self.seq_length)
         self.total_tp.assign_add(tp)
         self.total_fp.assign_add(fp_1)
@@ -206,9 +220,10 @@ class Precision(tf.keras.metrics.Metric):
         self.total_fp.assign(0)
 
 class Recall(tf.keras.metrics.Metric):
-    def __init__(self, def_val, seq_length, name=None, dtype=None):
+    def __init__(self, event_val, def_val, seq_length, name=None, dtype=None):
         super(Recall, self).__init__(name=name, dtype=dtype)
         self.seq_length = seq_length
+        self.event_val = event_val
         self.def_val = def_val
         self.total_tp = self.add_weight('total_tp',
             shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
@@ -217,7 +232,7 @@ class Recall(tf.keras.metrics.Metric):
 
     def update_state(self, y_true, y_pred):
         tp, _, _, fn = evaluate_interval_detection(
-            labels=y_true, predictions=y_pred,
+            labels=y_true, predictions=y_pred, event_val=self.event_val,
             def_val=self.def_val, seq_length=self.seq_length)
         self.total_tp.assign_add(tp)
         self.total_fn.assign_add(fn)
@@ -232,9 +247,10 @@ class Recall(tf.keras.metrics.Metric):
         self.total_fn.assign(0)
 
 class F1(tf.keras.metrics.Metric):
-    def __init__(self, def_val, seq_length, name=None, dtype=None):
+    def __init__(self, event_val, def_val, seq_length, name=None, dtype=None):
         super(F1, self).__init__(name=name, dtype=dtype)
         self.seq_length = seq_length
+        self.event_val = event_val
         self.def_val = def_val
         self.total_tp = self.add_weight('total_tp',
             shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
@@ -245,7 +261,7 @@ class F1(tf.keras.metrics.Metric):
 
     def update_state(self, y_true, y_pred):
         tp, fp_1, fp_2, fn = evaluate_interval_detection(
-            labels=y_true, predictions=y_pred,
+            labels=y_true, predictions=y_pred, event_val=event_val,
             def_val=self.def_val, seq_length=self.seq_length)
         self.total_tp.assign_add(tp)
         self.total_fp.assign_add(fp_1)
