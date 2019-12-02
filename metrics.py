@@ -4,7 +4,7 @@
 import tensorflow as tf
 
 @tf.function
-def evaluate_interval_detection(labels, predictions, event_val, def_val, other_vals=[], seq_length):
+def evaluate_interval_detection(labels, predictions, event_val, def_val, seq_length, other_vals=[]):
     """Evaluate interval detection for sequences by calculating
         tp, fp, and fn.
 
@@ -127,7 +127,7 @@ def evaluate_interval_detection(labels, predictions, event_val, def_val, other_v
 
     # Masks for other events
     other_masks = tf.map_fn(fn=lambda x: tf.equal(labels, x),
-        elems=tf.convert_to_tensor(other_vals), dtype=tf.bool)
+        elems=tf.convert_to_tensor(other_vals, dtype=tf.int32), dtype=tf.bool)
 
     # Retain only event_val in predictions
     predictions = tf.where(
@@ -175,9 +175,9 @@ def evaluate_interval_detection(labels, predictions, event_val, def_val, other_v
 
     return tp, fp_1, fp_2, fp_3, fn
 
-class TP_FP1_FP2_FN(tf.keras.metrics.Metric):
-    def __init__(self, event_val, def_val, other_vals, seq_length, name=None, dtype=None):
-        super(TP_FP1_FP2_FN, self).__init__(name=name, dtype=dtype)
+class TP_FP1_FP2_FP3_FN(tf.keras.metrics.Metric):
+    def __init__(self, event_val, def_val, seq_length, other_vals, name=None, dtype=None):
+        super(TP_FP1_FP2_FP3_FN, self).__init__(name=name, dtype=dtype)
         self.seq_length = seq_length
         self.event_val = event_val
         self.def_val = def_val
@@ -215,7 +215,7 @@ class TP_FP1_FP2_FN(tf.keras.metrics.Metric):
         self.total_fn.assign(0)
 
 class Precision(tf.keras.metrics.Metric):
-    def __init__(self, event_val, def_val, other_vals, seq_length, name=None, dtype=None):
+    def __init__(self, event_val, def_val, seq_length, other_vals, name=None, dtype=None):
         super(Precision, self).__init__(name=name, dtype=dtype)
         self.seq_length = seq_length
         self.event_val = event_val
@@ -246,7 +246,7 @@ class Precision(tf.keras.metrics.Metric):
         self.total_fp.assign(0)
 
 class Recall(tf.keras.metrics.Metric):
-    def __init__(self, event_val, def_val, other_vals, seq_length, name=None, dtype=None):
+    def __init__(self, event_val, def_val, seq_length, other_vals, name=None, dtype=None):
         super(Recall, self).__init__(name=name, dtype=dtype)
         self.seq_length = seq_length
         self.event_val = event_val
@@ -275,7 +275,7 @@ class Recall(tf.keras.metrics.Metric):
         self.total_fn.assign(0)
 
 class F1(tf.keras.metrics.Metric):
-    def __init__(self, event_val, def_val, other_vals, seq_length, name=None, dtype=None):
+    def __init__(self, event_val, def_val, seq_length, other_vals, name=None, dtype=None):
         super(F1, self).__init__(name=name, dtype=dtype)
         self.seq_length = seq_length
         self.event_val = event_val

@@ -375,7 +375,7 @@ def _ctc_decode(inputs, beam_width=10, def_val=-1):
 
     # For each sequence step
     for t in range(seq_length):
-        if t % 100 == 0:
+        if t % 1000 == 0:
             logging.info("CTC inference step {0}...".format(t))
         def _make_new_beams():
           fn = lambda : Beam(NEG_INF, NEG_INF, [])
@@ -424,7 +424,7 @@ def _ctc_decode(inputs, beam_width=10, def_val=-1):
                         tf.reduce_logsumexp([beam.p_b + inputs[t, event]]),
                         tf.concat([beam.bu_seq_b, [event]], 0)))
                 # B. 2) Case of no repeated event
-                else: ## TODO thteres something wrong here! ttry running examples
+                else:
                     new_beam.p_nb = tf.reduce_logsumexp([new_beam.p_nb,
                         beam.p_b + inputs[t, event], beam.p_nb + inputs[t, event]])
                     new_beam.bu_seq_nb_cand.append((
@@ -454,7 +454,7 @@ def _ctc_decode(inputs, beam_width=10, def_val=-1):
 
     return bu_seq, seq
 
-#@tf.function
+@tf.function
 def _ctc_decode_batch(inputs, beam_width, seq_length, def_val=0, pad_val=-1):
     # Add empty batch dimension if needed
     if tf.size(tf.shape(inputs)) == 2:
@@ -479,8 +479,6 @@ def decode_logits(logits, loss_mode, num_event, use_def, use_epsilon, seq_length
             use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
     elif loss_mode == 'ctc_ndef_all':
         return _ctc_decode_batch(logits, beam_width=5, seq_length=seq_length)
-        #return _greedy_decode_and_collapse(logits, num_event=num_event,
-        #    use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
     elif loss_mode == 'naive_def_none':
         return _greedy_decode_and_collapse(logits, num_event=num_event,
             use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)

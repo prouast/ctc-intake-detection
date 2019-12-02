@@ -316,50 +316,65 @@ def predict():
     # Load weights
     model.load_weights(FLAGS.model_dir)
     # Instantiate the metrics
-    seq_length = int(FLAGS.seq_length / FLAGS.seq_pool)
-    eval_tp_fp1_fp2_fn_metric = metrics.TP_FP1_FP2_FN(def_val=0, seq_length=seq_length)
-    eval_pre_metric = metrics.Precision(def_val=0, seq_length=seq_length)
-    eval_rec_metric = metrics.Recall(def_val=0, seq_length=seq_length)
-    eval_f1_metric = metrics.F1(def_val=0, seq_length=seq_length)
-    # Keep track of eval losses
-    eval_losses = []
-    # Files for evaluation
+    total_tp = 0; total_fp1 = 0; total_fp2 = 0; total_fp3 = 0; total_fn = 0
+    # Files for predicting
     filenames = gfile.Glob(os.path.join(FLAGS.eval_dir, "*.tfrecords"))
     # For each filename, export logits
     for filename in filenames:
         logging.info("Working on {0}.".format(filename))
         # Get the dataset
-        eval_dataset = dataset(is_training=False, is_predicting=True, data_dir=filename)
-        # Iterate through eval batches
-        logits = []; batch_predictions = []; labels = []
-        for i, (eval_features, eval_labels) in enumerate(eval_dataset):
-            # Adjust seq_length and labels
-            eval_labels = _adjust_labels(eval_labels, FLAGS.seq_pool,
+        data = dataset(is_training=False, is_predicting=True, data_dir=filename)
+        # Iterate through batches
+        for i, (b_features, b_labels) in enumerate(data):
+            # Adjust labels
+            b_labels = _adjust_labels(b_labels, FLAGS.seq_pool,
                 FLAGS.seq_length, FLAGS.batch_size)
             # Run the forward pass
-            eval_logits = model(eval_features, training=False)
-            # Decode logits into predictions
-            eval_predictions, decoded = decode_logits(eval_logits,
-                loss_mode='ctc_def_all', num_event=NUM_EVENT_CLASSES,
-                use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
-            eval_labels = tf.reshape(eval_labels, [-1])
-            eval_logits = tf.reshape(eval_logits, [-1, num_classes])
-            eval_predictions = tf.reshape(eval_predictions, [-1])
+            b_logits = model(b_features, training=False)
             # Collect results
-            labels.extend(eval_labels.numpy().tolist())
-            logits.extend(eval_logits.numpy().tolist())
-            batch_predictions.extend(eval_predictions.numpy().tolist())
+            if i == 0:
+                labels = tf.reshape(b_labels, [-1])
+                logits = tf.reshape(b_logits, [-1, num_classes])
+            else:
+                labels = tf.concat([labels, tf.reshape(b_labels, [-1])], 0)
+                logits = tf.concat([logits, tf.reshape(b_logits, [-1, num_classes])], 0)
         # Predict on video level
-        video_predictions, _ = decode_logits(tf.convert_to_tensor(logits),
+        v_seq_length = logits.get_shape()[0]
+        preds_ctc, _ = decode_logits(logits,
             loss_mode=FLAGS.loss_mode, num_event=NUM_EVENT_CLASSES,
-            use_def=use_def, use_epsilon=use_epsilon, seq_length=len(logits))
-        video_predictions = tf.reshape(video_predictions, [-1]).numpy().tolist()
+            use_def=use_def, use_epsilon=use_epsilon, seq_length=v_seq_length)
+        #preds_naive, _ = decode_logits(logits,
+        #    loss_mode='naive_def_none', num_event=NUM_EVENT_CLASSES,
+        #    use_def=use_def, use_epsilon=use_epsilon, seq_length=v_seq_length)
+        # Update metrics
+        tp, fp1, fp2, fp3, fn = metrics.evaluate_interval_detection(
+            labels=tf.expand_dims(labels, 0), predictions=preds_ctc,
+            event_val=1, def_val=0, seq_length=v_seq_length)
+        pre = tp / (tp + fp1 + fp2) # Todo include fp3
+        rec = tp / (tp + fn)
+        f1 = 2 * pre * rec / (pre + rec)
+        logging.info("TP: {0}, FP1: {1}, FP2: {2}, FN: {3}".format(
+            tp.numpy(), fp1.numpy(), fp2.numpy(), fn.numpy()))
+        logging.info("Precision: {}, Recall: {}".format(
+            pre.numpy(), rec.numpy()))
+        logging.info("F1: {0}".format(f1.numpy()))
+        total_tp += tp; total_fp1 += fp1; total_fp2 += fp2; total_fn += fn
+        preds_ctc = tf.reshape(preds_ctc, [-1])
         video_id = os.path.splitext(os.path.basename(filename))[0]
         ids = [video_id] * len(logits)
         logging.info("Writing {0} examples to {1}.csv...".format(len(ids), video_id))
-        save_array = np.column_stack((ids, labels, logits, batch_predictions,
-            video_predictions))
+        save_array = np.column_stack((ids, labels.numpy().tolist(),
+            logits.numpy().tolist(), preds_ctc.numpy().tolist()))
         np.savetxt("{0}.csv".format(video_id), save_array, delimiter=",", fmt='%s')
+    # Print metrics
+    logging.info("Finished")
+    pre = total_tp / (total_tp + total_fp1 + total_fp2) # Todo include fp3
+    rec = total_tp / (total_tp + total_fn)
+    f1 = 2 * pre * rec / (pre + rec)
+    logging.info("TP: {0}, FP1: {1}, FP2: {2}, FN: {3}".format(
+        total_tp, total_fp1, total_fp2, total_fn))
+    logging.info("Precision: {0}, Recall: {1}".format(pre, rec))
+    logging.info("F1: {0}".format(f1))
 
 def dataset(is_training, is_predicting, data_dir):
     """Input pipeline"""
