@@ -4,37 +4,41 @@
 import tensorflow as tf
 
 @tf.function
-def evaluate_interval_detection(labels, predictions, event_val, def_val, seq_length):
+def evaluate_interval_detection(labels, predictions, event_val, def_val, other_vals=[], seq_length):
     """Evaluate interval detection for sequences by calculating
-        tp, fp, and fn for given event_val and def_val.
+        tp, fp, and fn.
 
-    Follows the metric outlined by Kyritsis et al. (2019) in
+    Extends the metric outlined by Kyritsis et al. (2019) in
         Modeling wrist micromovements to measure in-meal eating behavior from
         inertial sensor data
         https://ieeexplore.ieee.org/abstract/document/8606156/
+        by introducing additional possible events.
 
     Args:
-        labels: The truth, where event_val means part of the sequence, other
-            values otherwise. [batch_size, seq_length]
-        predictions: The predictions, where event_val means part of the
-            sequence and other values otherwise. [batch_size, seq_length]
-        event_val: The value for true events (other values in the sequence
-            will be ignored)
-        def_val: The default value for non-events
+        labels: The ground truth [batch_size, seq_length], encoding relevant
+            sequences using the vals given in parameters.
+        predictions: The predictions [batch_size, seq_length], encoding relevant
+            sequences using the vals given in parameters.
+        event_val: The value for true events.
+        def_val: The default value for non-events.
+        other_vals: List or 1-D tensor of vals for other events.
         seq_length: The sequence length.
 
     Returns:
-        tp: True positives (number of true sequences of 1s predicted with at
-                least one predicting 1)
-        fp_1: False positives type 1 (number of excess predicting 1s matching
-                a true sequence of 1s in excess)
-        fp_2: False positives type 1 (number number of predicting 1s not
-                matching a true sequence of 1s)
-        fn: False negatives (number of true sequences of 1s not matched by at
-                least one predicting 1)
+        tp: True positives (number of true sequences of event_vals predicted
+            with at least one predicting event_val) - scalar
+        fp_1: False positives type 1 (number of excess predicting event_vals
+            matching a true sequence of event_val in excess) - scalar
+        fp_2: False positives type 2 (number of predicting event_vals matching
+            def_val instead of event_val) - scalar
+        fp_3: False positives type 3 (number of predicting event_vals matching
+            other_vals instead of event_val) - 1D tensor with value for each
+            element in other_vals
+        fn: False negatives (number of true sequences of event_vals not matched
+            by at least one predicting event_val)
     """
     def sequence_masks(labels, event_val, def_val, batch_size, seq_length):
-        """Generate masks [lanels, max_seq_count, seq_length] for all event sequences in the labels"""
+        """Generate masks [labels, max_seq_count, seq_length] for all event sequences in the labels"""
 
         # Mask non-event elements as False and event elements as True
         event_mask = tf.equal(labels, event_val)
@@ -109,16 +113,21 @@ def evaluate_interval_detection(labels, predictions, event_val, def_val, seq_len
     # Dimensions
     batch_size = labels.get_shape()[0]
 
-    # Mask of negative ground truth (not equal event_val)
-    neg_mask = tf.not_equal(labels, event_val)
-
-    # Compute whether labels are empty (no sequences)
-    empty = tf.equal(tf.reduce_sum(tf.cast(tf.logical_not(neg_mask), tf.int32)), 0)
+    # Compute whether labels are empty (no event_val sequences)
+    event_mask = tf.equal(labels, event_val)
+    empty = tf.equal(tf.reduce_sum(tf.cast(event_mask, tf.int32)), 0)
 
     # Derive positive ground truth mask; reshape to [n_gt_seq, seq_length]
     pos_mask, max_seq_count = sequence_masks(labels, event_val=event_val,
         def_val=def_val, batch_size=batch_size, seq_length=seq_length)
     pos_mask = tf.reshape(pos_mask, [-1, seq_length])
+
+    # Mask of default events
+    def_mask = tf.equal(labels, def_val)
+
+    # Masks for other events
+    other_masks = tf.map_fn(fn=lambda x: tf.equal(labels, x),
+        elems=tf.convert_to_tensor(other_vals), dtype=tf.bool)
 
     # Retain only event_val in predictions
     predictions = tf.where(
@@ -149,14 +158,22 @@ def evaluate_interval_detection(labels, predictions, event_val, def_val, seq_len
     fp_1 = tf.cond(empty,
         lambda: 0,
         lambda: tf.reduce_sum(tf.map_fn(lambda count: tf.cond(count > 1, lambda: count-1, lambda: 0), pred_sums)))
-    fp_2 = tf.reduce_sum(tf.boolean_mask(predictions, mask=neg_mask))
+
+    # False positives of type 2 are any detections on default events
+    fp_2 = tf.reduce_sum(tf.cast(tf.equal(tf.boolean_mask(predictions, def_mask), event_val), tf.int32))
+
+    # False positives of type 3 are any detections on other events
+    fp_3 = tf.map_fn(
+        fn=lambda x: tf.reduce_sum(tf.cast(tf.equal(tf.boolean_mask(predictions, x), event_val), tf.int32)),
+        elems=other_masks, dtype=tf.int32)
 
     tp = tf.cast(tp, tf.float32)
     fp_1 = tf.cast(fp_1, tf.float32)
     fp_2 = tf.cast(fp_2, tf.float32)
+    fp_3 = tf.cast(fp_3, tf.float32)
     fn = tf.cast(fn, tf.float32)
 
-    return tp, fp_1, fp_2, fn
+    return tp, fp_1, fp_2, fp_3, fn
 
 class TP_FP1_FP2_FN(tf.keras.metrics.Metric):
     def __init__(self, event_val, def_val, seq_length, name=None, dtype=None):
