@@ -176,56 +176,65 @@ def evaluate_interval_detection(labels, predictions, event_val, def_val, other_v
     return tp, fp_1, fp_2, fp_3, fn
 
 class TP_FP1_FP2_FN(tf.keras.metrics.Metric):
-    def __init__(self, event_val, def_val, seq_length, name=None, dtype=None):
+    def __init__(self, event_val, def_val, other_vals, seq_length, name=None, dtype=None):
         super(TP_FP1_FP2_FN, self).__init__(name=name, dtype=dtype)
         self.seq_length = seq_length
         self.event_val = event_val
         self.def_val = def_val
+        self.other_vals = other_vals
         self.total_tp = self.add_weight('total_tp',
             shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
         self.total_fp_1 = self.add_weight('total_fp_1',
             shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
         self.total_fp_2 = self.add_weight('total_fp_2',
             shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
+        self.total_fp_3 = self.add_weight('total_fp_3',
+            shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
         self.total_fn = self.add_weight('total_fn',
             shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
 
     def update_state(self, y_true, y_pred):
-        tp, fp_1, fp_2, fn = evaluate_interval_detection(
+        tp, fp_1, fp_2, fp_3, fn = evaluate_interval_detection(
             labels=y_true, predictions=y_pred, event_val=self.event_val,
-            def_val=self.def_val, seq_length=self.seq_length)
+            def_val=self.def_val, other_vals=self.other_vals,
+            seq_length=self.seq_length)
         self.total_tp.assign_add(tp)
         self.total_fp_1.assign_add(fp_1)
         self.total_fp_2.assign_add(fp_2)
+        self.total_fp_3.assign_add(tf.reduce_sum(fp_3))
         self.total_fn.assign_add(fn)
 
     def result(self):
-        return self.total_tp, self.total_fp_1, self.total_fp_2, self.total_fn
+        return self.total_tp, self.total_fp_1, self.total_fp_2, self.total_fp_3, self.total_fn
 
     def reset_states(self):
         self.total_tp.assign(0)
         self.total_fp_1.assign(0)
         self.total_fp_2.assign(0)
+        self.total_fp_3.assign(0)
         self.total_fn.assign(0)
 
 class Precision(tf.keras.metrics.Metric):
-    def __init__(self, event_val, def_val, seq_length, name=None, dtype=None):
+    def __init__(self, event_val, def_val, other_vals, seq_length, name=None, dtype=None):
         super(Precision, self).__init__(name=name, dtype=dtype)
         self.seq_length = seq_length
         self.event_val = event_val
         self.def_val = def_val
+        self.other_vals = other_vals
         self.total_tp = self.add_weight('total_tp',
             shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
         self.total_fp = self.add_weight('total_fp',
             shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
 
     def update_state(self, y_true, y_pred):
-        tp, fp_1, fp_2, _ = evaluate_interval_detection(
+        tp, fp_1, fp_2, fp_3, _ = evaluate_interval_detection(
             labels=y_true, predictions=y_pred, event_val=self.event_val,
-            def_val=self.def_val, seq_length=self.seq_length)
+            def_val=self.def_val, other_vals=self.other_vals,
+            seq_length=self.seq_length)
         self.total_tp.assign_add(tp)
         self.total_fp.assign_add(fp_1)
         self.total_fp.assign_add(fp_2)
+        self.total_fp.assign_add(tf.reduce_sum(fp_3))
 
     def result(self):
         return tf.math.divide_no_nan(
@@ -237,20 +246,22 @@ class Precision(tf.keras.metrics.Metric):
         self.total_fp.assign(0)
 
 class Recall(tf.keras.metrics.Metric):
-    def __init__(self, event_val, def_val, seq_length, name=None, dtype=None):
+    def __init__(self, event_val, def_val, other_vals, seq_length, name=None, dtype=None):
         super(Recall, self).__init__(name=name, dtype=dtype)
         self.seq_length = seq_length
         self.event_val = event_val
         self.def_val = def_val
+        self.other_vals = other_vals
         self.total_tp = self.add_weight('total_tp',
             shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
         self.total_fn = self.add_weight('total_fn',
             shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
 
     def update_state(self, y_true, y_pred):
-        tp, _, _, fn = evaluate_interval_detection(
+        tp, _, _, _, fn = evaluate_interval_detection(
             labels=y_true, predictions=y_pred, event_val=self.event_val,
-            def_val=self.def_val, seq_length=self.seq_length)
+            def_val=self.def_val, other_vals=self.other_vals,
+            seq_length=self.seq_length)
         self.total_tp.assign_add(tp)
         self.total_fn.assign_add(fn)
 
@@ -264,11 +275,12 @@ class Recall(tf.keras.metrics.Metric):
         self.total_fn.assign(0)
 
 class F1(tf.keras.metrics.Metric):
-    def __init__(self, event_val, def_val, seq_length, name=None, dtype=None):
+    def __init__(self, event_val, def_val, other_vals, seq_length, name=None, dtype=None):
         super(F1, self).__init__(name=name, dtype=dtype)
         self.seq_length = seq_length
         self.event_val = event_val
         self.def_val = def_val
+        self.other_vals = other_vals
         self.total_tp = self.add_weight('total_tp',
             shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
         self.total_fn = self.add_weight('total_fn',
@@ -277,12 +289,14 @@ class F1(tf.keras.metrics.Metric):
             shape=(), initializer=tf.zeros_initializer, dtype=tf.float32)
 
     def update_state(self, y_true, y_pred):
-        tp, fp_1, fp_2, fn = evaluate_interval_detection(
+        tp, fp_1, fp_2, fp_3, fn = evaluate_interval_detection(
             labels=y_true, predictions=y_pred, event_val=event_val,
-            def_val=self.def_val, seq_length=self.seq_length)
+            def_val=self.def_val, other_vals=self.other_vals,
+            seq_length=self.seq_length)
         self.total_tp.assign_add(tp)
         self.total_fp.assign_add(fp_1)
         self.total_fp.assign_add(fp_2)
+        self.total_fp.assign_add(tf.reduce_sum(fp_3))
         self.total_fn.assign_add(fn)
 
     def result(self):
