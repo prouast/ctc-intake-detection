@@ -55,7 +55,7 @@ class ModelSaver(object):
             self.checkpoints = sorted(
                 self.checkpoints, key=lambda x: x.score, reverse=self.sort_reverse)
             # The destination directory (make if necessary)
-            os.makedirs(self.dir, exist_ok=True)
+            os.makedirs(self.dir)
             # Save model
             if self.save_weights_only:
                 model.save_weights(checkpoint.path, overwrite=True)

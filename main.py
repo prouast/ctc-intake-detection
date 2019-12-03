@@ -23,7 +23,7 @@ LR_DECAY_STEPS = 1
 FLIP_ACC = [1., -1., 1.]
 FLIP_GYRO = [-1., 1., -1.]
 NUM_CHANNELS = 3
-NUM_EVENT_CLASSES = 1
+NUM_EVENT_CLASSES_MAP = {"label_1": 1, "label_2": 3, "label_3": 3, "label_4": 6}
 NUM_SHUFFLE = 100000
 NUM_TRAINING_FILES = 62
 ORIGINAL_SIZE = 140
@@ -37,7 +37,7 @@ flags.DEFINE_string(
 flags.DEFINE_integer(
     name='eval_steps', default=250, help='Eval and save best model after every x steps.')
 flags.DEFINE_enum(
-    name='input_mode', default="video_raw", enum_values=["video_raw", "inert", "video_fc7"],
+    name='input_mode', default="video", enum_values=["video", "inert"],
     help='What is the input mode')
 flags.DEFINE_integer(
     name='input_features', default=2048, help='Number of input features in fc7 mode.')
@@ -45,6 +45,9 @@ flags.DEFINE_integer(
     name='input_fps', default=8, help='Frames per seconds in input data.')
 flags.DEFINE_float(
     name='l2_lambda', default=1e-3, help='l2 regularization lambda.')
+flags.DEFINE_enum(
+    name='label_mode', default="label_1", enum_values=NUM_EVENT_CLASSES_MAP.keys(),
+    help='What is the label mode')
 flags.DEFINE_integer(
     name='log_steps', default=100, help='Log after every x steps.')
 flags.DEFINE_enum(
@@ -90,7 +93,7 @@ def train_and_evaluate():
     # Get the model
     use_def = 'ndef' not in FLAGS.loss_mode
     use_epsilon = 'ctc' in FLAGS.loss_mode
-    num_classes = NUM_EVENT_CLASSES + (1 if use_def else 0) + (1 if use_epsilon else 0)
+    num_classes = _get_num_classes(FLAGS.label_mode) + (1 if use_def else 0) + (1 if use_epsilon else 0)
     if FLAGS.model == "video_small_cnn_lstm":
         model = video_small_cnn_lstm.Model(FLAGS.seq_length, num_classes, FLAGS.l2_lambda)
     elif FLAGS.model == "inert_small_cnn_lstm":
@@ -115,13 +118,13 @@ def train_and_evaluate():
 
     # Instantiate the metrics
     seq_length = int(FLAGS.seq_length / FLAGS.seq_pool)
-    train_pre_metric = metrics.Precision(def_val=0, seq_length=seq_length)
-    train_rec_metric = metrics.Recall(def_val=0, seq_length=seq_length)
-    train_f1_metric = metrics.F1(def_val=0, seq_length=seq_length)
-    eval_tp_fp1_fp2_fn_metric = metrics.TP_FP1_FP2_FN(def_val=0, seq_length=seq_length)
-    eval_pre_metric = metrics.Precision(def_val=0, seq_length=seq_length)
-    eval_rec_metric = metrics.Recall(def_val=0, seq_length=seq_length)
-    eval_f1_metric = metrics.F1(def_val=0, seq_length=seq_length)
+    train_pre_metric = metrics.Precision(event_val=1, def_val=0, seq_length=seq_length)
+    train_rec_metric = metrics.Recall(event_val=1, def_val=0, seq_length=seq_length)
+    train_f1_metric = metrics.F1(event_val=1, def_val=0, seq_length=seq_length)
+    eval_tp_fp1_fp2_fn_metric = metrics.TP_FP1_FP2_FP3_FN(event_val=1, def_val=0, seq_length=seq_length)
+    eval_pre_metric = metrics.Precision(event_val=1, def_val=0, seq_length=seq_length)
+    eval_rec_metric = metrics.Recall(event_val=1, def_val=0, seq_length=seq_length)
+    eval_f1_metric = metrics.F1(event_val=1, def_val=0, seq_length=seq_length)
 
     # Set up log writer
     train_writer = tf.summary.create_file_writer(os.path.join(FLAGS.model_dir, "log/train"))
@@ -158,8 +161,11 @@ def train_and_evaluate():
             optimizer.apply_gradients(zip(grads, model.trainable_weights))
 
             # Decode logits into predictions
+            #train_predictions, decoded = decode_logits(train_logits,
+            #    loss_mode=FLAGS.loss_mode, num_event=NUM_EVENT_CLASSES,
+            #    use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
             train_predictions, decoded = decode_logits(train_logits,
-                loss_mode=FLAGS.loss_mode, num_event=NUM_EVENT_CLASSES,
+                loss_mode="ctc_def_all", num_event=_get_num_classes(FLAGS.label_mode),
                 use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
 
             # Update metrics
@@ -215,8 +221,11 @@ def train_and_evaluate():
                     eval_losses.append(eval_loss.numpy())
 
                     # Decode logits into predictions
+                    #eval_predictions, decoded = decode_logits(eval_logits,
+                    #    loss_mode=FLAGS.loss_mode, num_event=NUM_EVENT_CLASSES,
+                    #    use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
                     eval_predictions, decoded = decode_logits(eval_logits,
-                        loss_mode=FLAGS.loss_mode, num_event=NUM_EVENT_CLASSES,
+                        loss_mode="ctc_def_all", num_event=_get_num_classes(FLAGS.label_mode),
                         use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
 
                     # Calculate metric
@@ -226,7 +235,7 @@ def train_and_evaluate():
                     eval_f1_metric(eval_labels, eval_predictions)
 
                 # Get metrics
-                eval_tp, eval_fp1, eval_fp2, eval_fn = eval_tp_fp1_fp2_fn_metric.result()
+                eval_tp, eval_fp1, eval_fp2, _, eval_fn = eval_tp_fp1_fp2_fn_metric.result()
                 eval_pre = eval_pre_metric.result()
                 eval_rec = eval_rec_metric.result()
                 eval_f1 = eval_f1_metric.result()
@@ -306,7 +315,7 @@ def predict():
     # Get the model
     use_def = 'ndef' not in FLAGS.loss_mode
     use_epsilon = 'ctc' in FLAGS.loss_mode
-    num_classes = NUM_EVENT_CLASSES + (1 if use_def else 0) + (1 if use_epsilon else 0)
+    num_classes = _get_num_classes(FLAGS.label_mode) + (1 if use_def else 0) + (1 if use_epsilon else 0)
     if FLAGS.model == "video_small_cnn_lstm":
         model = video_small_cnn_lstm.Model(FLAGS.seq_length, num_classes, FLAGS.l2_lambda)
     elif FLAGS.model == "inert_small_cnn_lstm":
@@ -379,10 +388,10 @@ def predict():
 def dataset(is_training, is_predicting, data_dir):
     """Input pipeline"""
     # Scan for training files
-    if is_training:
-        filenames = gfile.Glob(os.path.join(data_dir, "*.tfrecords"))
-    elif is_predicting:
+    if is_predicting:
         filenames = [data_dir]
+    else:
+        filenames = gfile.Glob(os.path.join(data_dir, "*.tfrecords"))
     if not filenames:
         raise RuntimeError('No files found.')
     logging.info("Found {0} files.".format(str(len(filenames))))
@@ -391,9 +400,7 @@ def dataset(is_training, is_predicting, data_dir):
     # Lookup table for Labels
     table = None
     if FLAGS.input_mode == 'inert':
-        table = tf.lookup.StaticHashTable(
-            tf.lookup.KeyValueTensorInitializer(
-                ["Idle", "Intake"], [0, 1]), -1)
+        table = _get_hash_table(FLAGS.label_mode)
     # Shuffle files if needed
     if is_training:
         files = files.shuffle(NUM_TRAINING_FILES)
@@ -413,28 +420,18 @@ def dataset(is_training, is_predicting, data_dir):
 
     return dataset
 
+# TODO extend for label_mode
 def _get_input_parser(table):
     """Return the input parser"""
 
-    def input_parser_video_fc7(serialized_example):
-        """Parser for fc7 video features"""
-        features = tf.io.parse_single_example(
-            serialized_example, {
-                'example/label': tf.io.FixedLenFeature([], dtype=tf.int64),
-                'example/fc7': tf.io.FixedLenFeature([FLAGS.input_features], dtype=tf.float32)
-        })
-        label = tf.cast(features['example/label'], tf.int32)
-        fc7 = features['example/fc7']
-        return fc7, label
-
-    def input_parser_video_raw(serialized_example):
+    def input_parser_video(serialized_example):
         """Parser for raw video"""
         features = tf.io.parse_single_example(
             serialized_example, {
-                'example/label_1': tf.io.FixedLenFeature([], dtype=tf.int64),
+                'example/{}'.format(FLAGS.label_mode): tf.io.FixedLenFeature([], dtype=tf.int64),
                 'example/image': tf.io.FixedLenFeature([], dtype=tf.string)
         })
-        label = tf.cast(features['example/label_1'], tf.int32)
+        label = tf.cast(features['example/{}'.format(FLAGS.label_mode)], tf.int32)
         image_data = tf.decode_raw(features['example/image'], tf.uint8)
         image_data = tf.cast(image_data, tf.float32)
         image_data = tf.reshape(image_data,
@@ -445,23 +442,21 @@ def _get_input_parser(table):
         """Parser for inertial data"""
         features = tf.io.parse_single_example(
             serialized_example, {
-                'example/label_1': tf.io.FixedLenFeature([], dtype=tf.string),
+                'example/{}'.format(FLAGS.label_mode): tf.io.FixedLenFeature([], dtype=tf.string),
                 'example/dom_acc': tf.io.FixedLenFeature([3], dtype=tf.float32),
                 'example/dom_gyro': tf.io.FixedLenFeature([3], dtype=tf.float32),
                 'example/ndom_acc': tf.io.FixedLenFeature([3], dtype=tf.float32),
                 'example/ndom_gyro': tf.io.FixedLenFeature([3], dtype=tf.float32)
         })
-        label = tf.cast(table.lookup(features['example/label_1']), tf.int32)
+        label = tf.cast(table.lookup(features['example/{}'.format(FLAGS.label_mode)]), tf.int32)
         features = tf.stack(
             [features['example/dom_acc'], features['example/dom_gyro'],
              features['example/ndom_acc'], features['example/ndom_gyro']], 0)
         features = tf.squeeze(tf.reshape(features, [-1, 12]))
         return features, label
 
-    if FLAGS.input_mode == "video_fc7":
-        return input_parser_video_fc7
-    elif FLAGS.input_mode == "video_raw":
-        return input_parser_video_raw
+    if FLAGS.input_mode == "video":
+        return input_parser_video
     elif FLAGS.input_mode == "inert":
         return input_parser_inert
 
@@ -565,12 +560,32 @@ def _get_transformation_parser(is_training):
 
         return inert_data, label_data
 
-    if FLAGS.input_mode == "video_fc7":
-        return lambda f, l: (f, l)
-    elif FLAGS.input_mode == "video_raw":
+    if FLAGS.input_mode == "video":
         return image_transformation_parser
     elif FLAGS.input_mode == "inert":
         return inert_transformation_parser
+
+def _get_num_classes(label_category):
+    return NUM_EVENT_CLASSES_MAP[label_category]
+
+def _get_hash_table(label_category):
+    if label_category == 'label_1':
+        table = tf.lookup.StaticHashTable(
+            tf.lookup.KeyValueTensorInitializer(
+                ["Idle", "Intake"], [0, 1]), -1)
+    elif label_category == 'label_2':
+        table = tf.lookup.StaticHashTable(
+            tf.lookup.KeyValueTensorInitializer(
+                ["Idle", "Drink", "Eat", "Lick"], [0, 1, 2, 3]), -1)
+    elif label_category == 'label_3':
+        table = tf.lookup.StaticHashTable(
+            tf.lookup.KeyValueTensorInitializer(
+                ["Idle", "Both", "Left", "Right"], [0, 1, 2, 3]), -1)
+    elif label_category == 'label_4':
+        table = tf.lookup.StaticHashTable(
+            tf.lookup.KeyValueTensorInitializer(
+                ["Idle", "Cup", "Finger", "Fork", "Hand", "Knife", "Spoon"], [0, 1, 2, 3, 4, 5, 6]), -1)
+    return table
 
 # Run
 if __name__ == "__main__":

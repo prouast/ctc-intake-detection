@@ -176,7 +176,7 @@ def evaluate_interval_detection(labels, predictions, event_val, def_val, seq_len
     return tp, fp_1, fp_2, fp_3, fn
 
 class TP_FP1_FP2_FP3_FN(tf.keras.metrics.Metric):
-    def __init__(self, event_val, def_val, seq_length, other_vals, name=None, dtype=None):
+    def __init__(self, event_val, def_val, seq_length, other_vals=[], name=None, dtype=None):
         super(TP_FP1_FP2_FP3_FN, self).__init__(name=name, dtype=dtype)
         self.seq_length = seq_length
         self.event_val = event_val
@@ -215,7 +215,7 @@ class TP_FP1_FP2_FP3_FN(tf.keras.metrics.Metric):
         self.total_fn.assign(0)
 
 class Precision(tf.keras.metrics.Metric):
-    def __init__(self, event_val, def_val, seq_length, other_vals, name=None, dtype=None):
+    def __init__(self, event_val, def_val, seq_length, other_vals=[], name=None, dtype=None):
         super(Precision, self).__init__(name=name, dtype=dtype)
         self.seq_length = seq_length
         self.event_val = event_val
@@ -246,7 +246,7 @@ class Precision(tf.keras.metrics.Metric):
         self.total_fp.assign(0)
 
 class Recall(tf.keras.metrics.Metric):
-    def __init__(self, event_val, def_val, seq_length, other_vals, name=None, dtype=None):
+    def __init__(self, event_val, def_val, seq_length, other_vals=[], name=None, dtype=None):
         super(Recall, self).__init__(name=name, dtype=dtype)
         self.seq_length = seq_length
         self.event_val = event_val
@@ -275,7 +275,7 @@ class Recall(tf.keras.metrics.Metric):
         self.total_fn.assign(0)
 
 class F1(tf.keras.metrics.Metric):
-    def __init__(self, event_val, def_val, seq_length, other_vals, name=None, dtype=None):
+    def __init__(self, event_val, def_val, seq_length, other_vals=[], name=None, dtype=None):
         super(F1, self).__init__(name=name, dtype=dtype)
         self.seq_length = seq_length
         self.event_val = event_val
@@ -290,7 +290,7 @@ class F1(tf.keras.metrics.Metric):
 
     def update_state(self, y_true, y_pred):
         tp, fp_1, fp_2, fp_3, fn = evaluate_interval_detection(
-            labels=y_true, predictions=y_pred, event_val=event_val,
+            labels=y_true, predictions=y_pred, event_val=self.event_val,
             def_val=self.def_val, other_vals=self.other_vals,
             seq_length=self.seq_length)
         self.total_tp.assign_add(tp)
