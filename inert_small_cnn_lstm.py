@@ -31,8 +31,8 @@ class Model(tf.keras.Model):
 
     def __init__(self, num_classes, l2_lambda):
         super(Model, self).__init__()
-        self.num_conv = [64, 64, 128, 128]
-        self.num_dense = 64
+        self.num_conv = [64, 128, 256]
+        self.num_dense = 128
         self.num_lstm = [64, 128]
         self.conv_blocks = []
         for i, num_filters in enumerate(self.num_conv):

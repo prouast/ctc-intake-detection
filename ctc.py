@@ -375,8 +375,8 @@ def _ctc_decode(inputs, beam_width=10, def_val=-1):
 
     # For each sequence step
     for t in range(seq_length):
-        if t % 1000 == 0:
-            logging.info("CTC inference step {0}...".format(t))
+        #if t % 1000 == 0:
+        #    logging.info("CTC inference step {0}...".format(t))
         def _make_new_beams():
           fn = lambda : Beam(NEG_INF, NEG_INF, [])
           return collections.defaultdict(fn)
@@ -457,8 +457,10 @@ def _ctc_decode(inputs, beam_width=10, def_val=-1):
 @tf.function
 def _ctc_decode_batch(inputs, beam_width, seq_length, def_val=0, pad_val=-1):
     # Add empty batch dimension if needed
-    if tf.size(tf.shape(inputs)) == 2:
-        inputs = tf.expand_dims(inputs, 0)
+    inputs = tf.cond(
+        pred=tf.equal(tf.size(tf.shape(inputs)), 2),
+        true_fn=lambda: tf.expand_dims(inputs, 0),
+        false_fn=lambda: tf.identity(inputs))
     # Decode each example
     decoded, seq = tf.map_fn(
         fn=lambda x: _ctc_decode(x, beam_width=beam_width, def_val=-1),
