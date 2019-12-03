@@ -128,10 +128,7 @@ def train_and_evaluate():
         'mean_recall': tf.keras.metrics.Mean(),
         'mean_f1': tf.keras.metrics.Mean()}
     for i in range(1, num_event_classes + 1):
-        if num_event_classes == 1:
-            other_vals = []
-        else:
-            other_vals = [range(1, num_event_classes + 1).remove(i)]
+        other_vals = [j for j in range(1, num_event_classes + 1) if j != i]
         train_metrics['class_{}_precision'.format(i)] = metrics.Precision(
             event_val=i, def_val=0, seq_length=seq_length, other_vals=other_vals)
         train_metrics['class_{}_recall'.format(i)] = metrics.Recall(
