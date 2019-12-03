@@ -5,7 +5,7 @@ import glob
 import os
 
 class Checkpoint(object):
-    """ """
+    """One checkpoint"""
     score = None
     path = None
     dir = None
@@ -33,7 +33,7 @@ class ModelSaver(object):
                  save_weights_only=True,
                  compare_fn=lambda x,y: x.score < y.score,
                  sort_reverse=False):
-        """ """
+        """Init the ModelSaver"""
         self.checkpoints = []
         self.dir = dir
         self.keep_num = keep_num
@@ -55,7 +55,8 @@ class ModelSaver(object):
             self.checkpoints = sorted(
                 self.checkpoints, key=lambda x: x.score, reverse=self.sort_reverse)
             # The destination directory (make if necessary)
-            os.makedirs(self.dir)
+            if not os.path.exists(self.dir):
+                os.makedirs(self.dir)
             # Save model
             if self.save_weights_only:
                 model.save_weights(checkpoint.path, overwrite=True)

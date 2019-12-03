@@ -93,7 +93,8 @@ def train_and_evaluate():
     # Get the model
     use_def = 'ndef' not in FLAGS.loss_mode
     use_epsilon = 'ctc' in FLAGS.loss_mode
-    num_classes = _get_num_classes(FLAGS.label_mode) + (1 if use_def else 0) + (1 if use_epsilon else 0)
+    num_event_classes = _get_num_classes(FLAGS.label_mode)
+    num_classes = num_event_classes + (1 if use_def else 0) + (1 if use_epsilon else 0)
     if FLAGS.model == "video_small_cnn_lstm":
         model = video_small_cnn_lstm.Model(FLAGS.seq_length, num_classes, FLAGS.l2_lambda)
     elif FLAGS.model == "inert_small_cnn_lstm":
@@ -118,13 +119,33 @@ def train_and_evaluate():
 
     # Instantiate the metrics
     seq_length = int(FLAGS.seq_length / FLAGS.seq_pool)
-    train_pre_metric = metrics.Precision(event_val=1, def_val=0, seq_length=seq_length)
-    train_rec_metric = metrics.Recall(event_val=1, def_val=0, seq_length=seq_length)
-    train_f1_metric = metrics.F1(event_val=1, def_val=0, seq_length=seq_length)
-    eval_tp_fp1_fp2_fn_metric = metrics.TP_FP1_FP2_FP3_FN(event_val=1, def_val=0, seq_length=seq_length)
-    eval_pre_metric = metrics.Precision(event_val=1, def_val=0, seq_length=seq_length)
-    eval_rec_metric = metrics.Recall(event_val=1, def_val=0, seq_length=seq_length)
-    eval_f1_metric = metrics.F1(event_val=1, def_val=0, seq_length=seq_length)
+    train_metrics = {
+        'mean_precision': tf.keras.metrics.Mean(),
+        'mean_recall': tf.keras.metrics.Mean(),
+        'mean_f1': tf.keras.metrics.Mean()}
+    eval_metrics = {
+        'mean_precision': tf.keras.metrics.Mean(),
+        'mean_recall': tf.keras.metrics.Mean(),
+        'mean_f1': tf.keras.metrics.Mean()}
+    for i in range(1, num_event_classes + 1):
+        if num_event_classes == 1:
+            other_vals = []
+        else:
+            other_vals = [range(1, num_event_classes + 1).remove(i)]
+        train_metrics['class_{}_precision'.format(i)] = metrics.Precision(
+            event_val=i, def_val=0, seq_length=seq_length, other_vals=other_vals)
+        train_metrics['class_{}_recall'.format(i)] = metrics.Recall(
+            event_val=i, def_val=0, seq_length=seq_length, other_vals=other_vals)
+        train_metrics['class_{}_f1'.format(i)] = metrics.F1(
+            event_val=i, def_val=0, seq_length=seq_length, other_vals=other_vals)
+        eval_metrics['class_{}_tp_fp1_fp2_fp3_fn'.format(i)] = metrics.TP_FP1_FP2_FP3_FN(
+            event_val=i, def_val=0, seq_length=seq_length, other_vals=other_vals)
+        eval_metrics['class_{}_precision'.format(i)] = metrics.Precision(
+            event_val=i, def_val=0, seq_length=seq_length, other_vals=other_vals)
+        eval_metrics['class_{}_recall'.format(i)] = metrics.Recall(
+            event_val=i, def_val=0, seq_length=seq_length, other_vals=other_vals)
+        eval_metrics['class_{}_f1'.format(i)] = metrics.F1(
+            event_val=i, def_val=0, seq_length=seq_length, other_vals=other_vals)
 
     # Set up log writer
     train_writer = tf.summary.create_file_writer(os.path.join(FLAGS.model_dir, "log/train"))
@@ -165,37 +186,58 @@ def train_and_evaluate():
             #    loss_mode=FLAGS.loss_mode, num_event=NUM_EVENT_CLASSES,
             #    use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
             train_predictions, decoded = decode_logits(train_logits,
-                loss_mode="ctc_def_all", num_event=_get_num_classes(FLAGS.label_mode),
+                loss_mode="ctc_def_all", num_event=num_event_classes,
                 use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
 
             # Update metrics
-            train_pre_metric(train_labels, train_predictions)
-            train_rec_metric(train_labels, train_predictions)
-            train_f1_metric(train_labels, train_predictions)
+            for i in range(1, num_event_classes + 1):
+                train_metrics['class_{}_precision'.format(i)](train_labels, train_predictions)
+                train_metrics['class_{}_recall'.format(i)](train_labels, train_predictions)
+                train_metrics['class_{}_f1'.format(i)](train_labels, train_predictions)
+                train_metrics['mean_precision'](train_metrics['class_{}_precision'.format(i)].result())
+                train_metrics['mean_recall'](train_metrics['class_{}_recall'.format(i)].result())
+                train_metrics['mean_f1'](train_metrics['class_{}_f1'.format(i)].result())
 
             # Log every FLAGS.log_steps steps.
             if global_step % FLAGS.log_steps == 0:
-                # Get metrics
-                train_pre = train_pre_metric.result()
-                train_rec = train_rec_metric.result()
-                train_f1 = train_f1_metric.result()
-                # Console
+                # General
                 logging.info('Step %s in epoch %s; global step %s' % (step, epoch, global_step))
                 logging.info('Seen this epoch: %s samples' % ((step + 1) * FLAGS.batch_size))
                 logging.info('Training loss (this step): %s' % float(train_loss))
-                logging.info('Training precision (this step): %s' % (float(train_pre),))
-                logging.info('Training recall (this step): %s' % (float(train_rec),))
-                logging.info('Training f1 (this step): %s' % (float(train_f1),))
+                logging.info('Mean training precision (this step): {}'.format(float(train_metrics['mean_precision'].result())))
+                logging.info('Mean training recall (this step): {}'.format(float(train_metrics['mean_recall'].result())))
+                logging.info('Mean training f1 (this step): {}'.format(float(train_metrics['mean_f1'].result())))
                 # TensorBoard
                 with train_writer.as_default():
-                    tf.summary.scalar('metrics/precision', data=train_pre, step=global_step)
-                    tf.summary.scalar('metrics/recall', data=train_rec, step=global_step)
-                    tf.summary.scalar('metrics/f1', data=train_f1, step=global_step)
                     tf.summary.scalar('training/loss', data=train_loss, step=global_step)
                     tf.summary.scalar('training/learning_rate', data=lr_schedule(epoch), step=global_step)
-                train_pre_metric.reset_states()
-                train_rec_metric.reset_states()
-                train_f1_metric.reset_states()
+                    tf.summary.scalar('metrics/train_mean_precision', data=train_metrics['mean_precision'].result(), step=global_step)
+                    tf.summary.scalar('metrics/train_mean_recall', data=train_metrics['mean_recall'].result(), step=global_step)
+                    tf.summary.scalar('metrics/train_mean_f1', data=train_metrics['mean_f1'].result(), step=global_step)
+                # Reset metrics
+                train_metrics['mean_precision'].reset_states()
+                train_metrics['mean_recall'].reset_states()
+                train_metrics['mean_f1'].reset_states()
+                # For each class
+                for i in range(1, num_event_classes + 1):
+                    # Get metrics
+                    train_pre = train_metrics['class_{}_precision'.format(i)].result()
+                    train_rec = train_metrics['class_{}_recall'.format(i)].result()
+                    train_f1 = train_metrics['class_{}_f1'.format(i)].result()
+                    # Console
+                    logging.info('Class {} training precision (this step): {}'.format(i, float(train_pre)))
+                    logging.info('Class {} training recall (this step): {}'.format(i, float(train_rec)))
+                    logging.info('Class {} training f1 (this step): {}'.format(i, float(train_f1)))
+                    # TensorBoard
+                    with train_writer.as_default():
+                        tf.summary.scalar('metrics/train_class_{}_precision'.format(i), data=train_pre, step=global_step)
+                        tf.summary.scalar('metrics/train_class_{}_recall'.format(i), data=train_rec, step=global_step)
+                        tf.summary.scalar('metrics/train_class_{}_f1'.format(i), data=train_f1, step=global_step)
+                    # Reset metrics
+                    train_metrics['class_{}_precision'.format(i)].reset_states()
+                    train_metrics['class_{}_recall'.format(i)].reset_states()
+                    train_metrics['class_{}_f1'.format(i)].reset_states()
+                # TensorBoard
                 train_writer.flush()
 
             # Evaluate every FLAGS.eval_steps steps.
@@ -225,51 +267,67 @@ def train_and_evaluate():
                     #    loss_mode=FLAGS.loss_mode, num_event=NUM_EVENT_CLASSES,
                     #    use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
                     eval_predictions, decoded = decode_logits(eval_logits,
-                        loss_mode="ctc_def_all", num_event=_get_num_classes(FLAGS.label_mode),
+                        loss_mode="ctc_def_all", num_event=num_event_classes,
                         use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
 
-                    # Calculate metric
-                    eval_tp_fp1_fp2_fn_metric(eval_labels, eval_predictions)
-                    eval_pre_metric(eval_labels, eval_predictions)
-                    eval_rec_metric(eval_labels, eval_predictions)
-                    eval_f1_metric(eval_labels, eval_predictions)
-
-                # Get metrics
-                eval_tp, eval_fp1, eval_fp2, _, eval_fn = eval_tp_fp1_fp2_fn_metric.result()
-                eval_pre = eval_pre_metric.result()
-                eval_rec = eval_rec_metric.result()
-                eval_f1 = eval_f1_metric.result()
-                eval_loss = np.mean(eval_losses)
+                    # Update metric
+                    for i in range(1, num_event_classes + 1):
+                        eval_metrics['class_{}_tp_fp1_fp2_fp3_fn'.format(i)](eval_labels, eval_predictions)
+                        eval_metrics['class_{}_precision'.format(i)](eval_labels, eval_predictions)
+                        eval_metrics['class_{}_recall'.format(i)](eval_labels, eval_predictions)
+                        eval_metrics['class_{}_f1'.format(i)](eval_labels, eval_predictions)
+                        eval_metrics['mean_precision'](eval_metrics['class_{}_precision'.format(i)].result())
+                        eval_metrics['mean_recall'](eval_metrics['class_{}_recall'.format(i)].result())
+                        eval_metrics['mean_f1'](eval_metrics['class_{}_f1'.format(i)].result())
 
                 # Console
+                eval_loss = np.mean(eval_losses)
                 logging.info('Evaluation loss: %s' % float(eval_loss))
-                logging.info('Evaluation tp: %s, fp1: %s, fp2: %s, fn: %s' %
-                    (int(eval_tp), int(eval_fp1), int(eval_fp2), int(eval_fn)))
-                logging.info('Evaluation precision: %s' % (float(eval_pre),))
-                logging.info('Evaluation recall: %s' % (float(eval_rec),))
-                logging.info('Evaluation f1: %s' % (float(eval_f1),))
-
+                logging.info('Mean eval precision: {}'.format(float(eval_metrics['mean_precision'].result())))
+                logging.info('Mean eval recall: {}'.format(float(eval_metrics['mean_recall'].result())))
+                logging.info('Mean eval f1: {}'.format(float(eval_metrics['mean_f1'].result())))
                 # TensorBoard
-                with eval_writer.as_default():
-                    tf.summary.scalar('metrics/tp', data=eval_tp, step=global_step)
-                    tf.summary.scalar('metrics/fp_1', data=eval_fp1, step=global_step)
-                    tf.summary.scalar('metrics/fp_2', data=eval_fp2, step=global_step)
-                    tf.summary.scalar('metrics/fn', data=eval_fn, step=global_step)
-                    tf.summary.scalar('metrics/precision', data=eval_pre, step=global_step)
-                    tf.summary.scalar('metrics/recall', data=eval_rec, step=global_step)
-                    tf.summary.scalar('metrics/f1', data=eval_f1, step=global_step)
+                with train_writer.as_default():
                     tf.summary.scalar('training/loss', data=eval_loss, step=global_step)
-                eval_writer.flush()
-
-                # Reset eval metric states after evaluation
-                eval_tp_fp1_fp2_fn_metric.reset_states()
-                eval_pre_metric.reset_states()
-                eval_rec_metric.reset_states()
-                eval_f1_metric.reset_states()
-
+                    tf.summary.scalar('metrics/eval_mean_precision', data=eval_metrics['mean_precision'].result(), step=global_step)
+                    tf.summary.scalar('metrics/eval_mean_recall', data=eval_metrics['mean_recall'].result(), step=global_step)
+                    tf.summary.scalar('metrics/eval_mean_f1', data=eval_metrics['mean_f1'].result(), step=global_step)
                 # Save best models
-                model_saver.save(model=model, score=eval_f1.numpy(),
-                    step=global_step, file="model")
+                model_saver.save(model=model, score=float(eval_metrics['mean_f1'].result()), step=global_step, file="model")
+                # Reset metrics
+                eval_metrics['mean_precision'].reset_states()
+                eval_metrics['mean_recall'].reset_states()
+                eval_metrics['mean_f1'].reset_states()
+                # For each class
+                for i in range(1, num_event_classes + 1):
+                    # Get metrics
+                    eval_tp, eval_fp1, eval_fp2, eval_fp3, eval_fn = eval_metrics['class_{}_tp_fp1_fp2_fp3_fn'.format(i)].result()
+                    eval_pre = eval_metrics['class_{}_precision'.format(i)].result()
+                    eval_rec = eval_metrics['class_{}_recall'.format(i)].result()
+                    eval_f1 = eval_metrics['class_{}_f1'.format(i)].result()
+                    # Console
+                    logging.info('Class {} eval tp: {}, fp1: {}, fp2: {}, fp3: {}, fn: {}'.format(
+                        i, int(eval_tp), int(eval_fp1), int(eval_fp2), int(eval_fp3), int(eval_fn)))
+                    logging.info('Class {} eval precision: {}'.format(i, float(eval_pre)))
+                    logging.info('Class {} eval recall: {}'.format(i, float(eval_rec)))
+                    logging.info('Class {} eval f1: {}'.format(i, float(eval_f1)))
+                    # TensorBoard
+                    with train_writer.as_default():
+                        tf.summary.scalar('metrics/eval_class_{}_tp'.format(i), data=eval_tp, step=global_step)
+                        tf.summary.scalar('metrics/eval_class_{}_fp_1'.format(i), data=eval_fp1, step=global_step)
+                        tf.summary.scalar('metrics/eval_class_{}_fp_2'.format(i), data=eval_fp2, step=global_step)
+                        tf.summary.scalar('metrics/eval_class_{}_fp_3'.format(i), data=eval_fp3, step=global_step)
+                        tf.summary.scalar('metrics/eval_class_{}_fn'.format(i), data=eval_fn, step=global_step)
+                        tf.summary.scalar('metrics/eval_class_{}_precision'.format(i), data=eval_pre, step=global_step)
+                        tf.summary.scalar('metrics/eval_class_{}_recall'.format(i), data=eval_rec, step=global_step)
+                        tf.summary.scalar('metrics/eval_class_{}_f1'.format(i), data=eval_f1, step=global_step)
+                    # Reset eval metric states after evaluation
+                    eval_metrics['class_{}_tp_fp1_fp2_fp3_fn'.format(i)].reset_states()
+                    eval_metrics['class_{}_precision'.format(i)].reset_states()
+                    eval_metrics['class_{}_recall'.format(i)].reset_states()
+                    eval_metrics['class_{}_f1'.format(i)].reset_states()
+                # TensorBoard
+                eval_writer.flush()
 
             # Increment global step
             global_step += 1
@@ -345,8 +403,10 @@ def predict():
                 labels = tf.reshape(b_labels, [-1])
                 logits = tf.reshape(b_logits, [-1, num_classes])
             else:
-                labels = tf.concat([labels, tf.reshape(b_labels, [-1])], 0)
-                logits = tf.concat([logits, tf.reshape(b_logits, [-1, num_classes])], 0)
+                labels = tf.concat([labels, b_labels[-1, -1]], 0)
+                logits = tf.concat([logits, b_logits[-1, -1]], 0)
+                print(labels)
+                print(logits)
         # Predict on video level
         v_seq_length = logits.get_shape()[0]
         preds_ctc, _ = decode_logits(logits,
@@ -359,15 +419,16 @@ def predict():
         tp, fp1, fp2, fp3, fn = metrics.evaluate_interval_detection(
             labels=tf.expand_dims(labels, 0), predictions=preds_ctc,
             event_val=1, def_val=0, seq_length=v_seq_length)
-        pre = tp / (tp + fp1 + fp2) # Todo include fp3
+        pre = tp / (tp + fp1 + fp2 + tf.reduce_sum(fp3))
         rec = tp / (tp + fn)
         f1 = 2 * pre * rec / (pre + rec)
-        logging.info("TP: {0}, FP1: {1}, FP2: {2}, FN: {3}".format(
-            tp.numpy(), fp1.numpy(), fp2.numpy(), fn.numpy()))
+        logging.info("TP: {0}, FP1: {1}, FP2: {2}, FP3: {3}, FN: {4}".format(
+            tp.numpy(), fp1.numpy(), fp2.numpy(), fp3.numpy(), fn.numpy()))
         logging.info("Precision: {}, Recall: {}".format(
             pre.numpy(), rec.numpy()))
         logging.info("F1: {0}".format(f1.numpy()))
-        total_tp += tp; total_fp1 += fp1; total_fp2 += fp2; total_fn += fn
+        total_tp += tp; total_fp1 += fp1; total_fp2 += fp2
+        total_fp3 += tf.reduce_sum(fp3); total_fn += fn
         preds_ctc = tf.reshape(preds_ctc, [-1])
         video_id = os.path.splitext(os.path.basename(filename))[0]
         ids = [video_id] * len(logits)
@@ -377,11 +438,11 @@ def predict():
         np.savetxt("{0}.csv".format(video_id), save_array, delimiter=",", fmt='%s')
     # Print metrics
     logging.info("Finished")
-    pre = total_tp / (total_tp + total_fp1 + total_fp2) # Todo include fp3
+    pre = total_tp / (total_tp + total_fp1 + total_fp2 + total_fp3)
     rec = total_tp / (total_tp + total_fn)
     f1 = 2 * pre * rec / (pre + rec)
-    logging.info("TP: {0}, FP1: {1}, FP2: {2}, FN: {3}".format(
-        total_tp, total_fp1, total_fp2, total_fn))
+    logging.info("TP: {0}, FP1: {1}, FP2: {2}, FP3: {3}, FN: {3}".format(
+        total_tp, total_fp1, total_fp2, total_fp3, total_fn))
     logging.info("Precision: {0}, Recall: {1}".format(pre, rec))
     logging.info("F1: {0}".format(f1))
 
@@ -409,7 +470,7 @@ def dataset(is_training, is_predicting, data_dir):
             tf.data.TFRecordDataset(filename)
             .map(map_func=_get_input_parser(table),
                 num_parallel_calls=AUTOTUNE)
-            .apply(_get_sequence_batch_fn(is_training))
+            .apply(_get_sequence_batch_fn(is_training, is_predicting))
             .map(map_func=_get_transformation_parser(is_training),
                 num_parallel_calls=AUTOTUNE),
         cycle_length=4)
@@ -420,7 +481,6 @@ def dataset(is_training, is_predicting, data_dir):
 
     return dataset
 
-# TODO extend for label_mode
 def _get_input_parser(table):
     """Return the input parser"""
 
@@ -460,9 +520,12 @@ def _get_input_parser(table):
     elif FLAGS.input_mode == "inert":
         return input_parser_inert
 
-def _get_sequence_batch_fn(is_training):
+def _get_sequence_batch_fn(is_training, is_predicting):
     """Return sliding batched dataset or batched dataset."""
-    shift = int(FLAGS.input_fps/FLAGS.seq_fps) if is_training else FLAGS.seq_length
+    if is_training or is_predicting:
+        shift = int(FLAGS.input_fps/FLAGS.seq_fps)
+    else:
+        shift = FLAGS.seq_length
     return lambda dataset: dataset.window(
         size=FLAGS.seq_length, shift=shift, drop_remainder=True).flat_map(
             lambda f_w, l_w: tf.data.Dataset.zip(
