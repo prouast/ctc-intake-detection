@@ -211,9 +211,9 @@ def train_and_evaluate():
                 with train_writer.as_default():
                     tf.summary.scalar('training/loss', data=train_loss, step=global_step)
                     tf.summary.scalar('training/learning_rate', data=lr_schedule(epoch), step=global_step)
-                    tf.summary.scalar('metrics/train_mean_precision', data=train_metrics['mean_precision'].result(), step=global_step)
-                    tf.summary.scalar('metrics/train_mean_recall', data=train_metrics['mean_recall'].result(), step=global_step)
-                    tf.summary.scalar('metrics/train_mean_f1', data=train_metrics['mean_f1'].result(), step=global_step)
+                    tf.summary.scalar('metrics/mean_precision', data=train_metrics['mean_precision'].result(), step=global_step)
+                    tf.summary.scalar('metrics/mean_recall', data=train_metrics['mean_recall'].result(), step=global_step)
+                    tf.summary.scalar('metrics/mean_f1', data=train_metrics['mean_f1'].result(), step=global_step)
                 # Reset metrics
                 train_metrics['mean_precision'].reset_states()
                 train_metrics['mean_recall'].reset_states()
@@ -230,9 +230,9 @@ def train_and_evaluate():
                     logging.info('Class {} training f1 (this step): {}'.format(i, float(train_f1)))
                     # TensorBoard
                     with train_writer.as_default():
-                        tf.summary.scalar('metrics/train_class_{}_precision'.format(i), data=train_pre, step=global_step)
-                        tf.summary.scalar('metrics/train_class_{}_recall'.format(i), data=train_rec, step=global_step)
-                        tf.summary.scalar('metrics/train_class_{}_f1'.format(i), data=train_f1, step=global_step)
+                        tf.summary.scalar('metrics/class_{}_precision'.format(i), data=train_pre, step=global_step)
+                        tf.summary.scalar('metrics/class_{}_recall'.format(i), data=train_rec, step=global_step)
+                        tf.summary.scalar('metrics/class_{}_f1'.format(i), data=train_f1, step=global_step)
                     # Reset metrics
                     train_metrics['class_{}_precision'.format(i)].reset_states()
                     train_metrics['class_{}_recall'.format(i)].reset_states()
@@ -287,11 +287,11 @@ def train_and_evaluate():
                 logging.info('Mean eval recall: {}'.format(float(eval_metrics['mean_recall'].result())))
                 logging.info('Mean eval f1: {}'.format(float(eval_metrics['mean_f1'].result())))
                 # TensorBoard
-                with train_writer.as_default():
+                with eval_writer.as_default():
                     tf.summary.scalar('training/loss', data=eval_loss, step=global_step)
-                    tf.summary.scalar('metrics/eval_mean_precision', data=eval_metrics['mean_precision'].result(), step=global_step)
-                    tf.summary.scalar('metrics/eval_mean_recall', data=eval_metrics['mean_recall'].result(), step=global_step)
-                    tf.summary.scalar('metrics/eval_mean_f1', data=eval_metrics['mean_f1'].result(), step=global_step)
+                    tf.summary.scalar('metrics/mean_precision', data=eval_metrics['mean_precision'].result(), step=global_step)
+                    tf.summary.scalar('metrics/mean_recall', data=eval_metrics['mean_recall'].result(), step=global_step)
+                    tf.summary.scalar('metrics/mean_f1', data=eval_metrics['mean_f1'].result(), step=global_step)
                 # Save best models
                 model_saver.save(model=model, score=float(eval_metrics['mean_f1'].result()), step=global_step, file="model")
                 # Reset metrics
@@ -312,15 +312,15 @@ def train_and_evaluate():
                     logging.info('Class {} eval recall: {}'.format(i, float(eval_rec)))
                     logging.info('Class {} eval f1: {}'.format(i, float(eval_f1)))
                     # TensorBoard
-                    with train_writer.as_default():
-                        tf.summary.scalar('metrics/eval_class_{}_tp'.format(i), data=eval_tp, step=global_step)
-                        tf.summary.scalar('metrics/eval_class_{}_fp_1'.format(i), data=eval_fp1, step=global_step)
-                        tf.summary.scalar('metrics/eval_class_{}_fp_2'.format(i), data=eval_fp2, step=global_step)
-                        tf.summary.scalar('metrics/eval_class_{}_fp_3'.format(i), data=eval_fp3, step=global_step)
-                        tf.summary.scalar('metrics/eval_class_{}_fn'.format(i), data=eval_fn, step=global_step)
-                        tf.summary.scalar('metrics/eval_class_{}_precision'.format(i), data=eval_pre, step=global_step)
-                        tf.summary.scalar('metrics/eval_class_{}_recall'.format(i), data=eval_rec, step=global_step)
-                        tf.summary.scalar('metrics/eval_class_{}_f1'.format(i), data=eval_f1, step=global_step)
+                    with eval_writer.as_default():
+                        tf.summary.scalar('metrics/class_{}_tp'.format(i), data=eval_tp, step=global_step)
+                        tf.summary.scalar('metrics/class_{}_fp_1'.format(i), data=eval_fp1, step=global_step)
+                        tf.summary.scalar('metrics/class_{}_fp_2'.format(i), data=eval_fp2, step=global_step)
+                        tf.summary.scalar('metrics/class_{}_fp_3'.format(i), data=eval_fp3, step=global_step)
+                        tf.summary.scalar('metrics/class_{}_fn'.format(i), data=eval_fn, step=global_step)
+                        tf.summary.scalar('metrics/class_{}_precision'.format(i), data=eval_pre, step=global_step)
+                        tf.summary.scalar('metrics/class_{}_recall'.format(i), data=eval_rec, step=global_step)
+                        tf.summary.scalar('metrics/class_{}_f1'.format(i), data=eval_f1, step=global_step)
                     # Reset eval metric states after evaluation
                     eval_metrics['class_{}_tp_fp1_fp2_fp3_fn'.format(i)].reset_states()
                     eval_metrics['class_{}_precision'.format(i)].reset_states()
