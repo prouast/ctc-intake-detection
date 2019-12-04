@@ -469,7 +469,7 @@ def dataset(is_training, is_predicting, data_dir):
             .map(map_func=_get_input_parser(table),
                 num_parallel_calls=AUTOTUNE)
             .apply(_get_sequence_batch_fn(is_training, is_predicting))
-            #.filter() # TODO only use non-empty labels
+            .filter(predicate=_get_not_all_def_label_filter(def_val=0))
             .map(map_func=_get_transformation_parser(is_training),
                 num_parallel_calls=AUTOTUNE),
         cycle_length=4)
@@ -628,6 +628,12 @@ def _get_transformation_parser(is_training):
         return image_transformation_parser
     elif FLAGS.input_mode == "inert":
         return inert_transformation_parser
+
+def _get_not_all_def_label_filter(def_val):
+    def predicate_fn(features, labels):
+        return tf.math.greater(tf.reduce_sum(
+            tf.cast(tf.not_equal(labels, def_val), tf.float32)), 0)
+    return predicate_fn
 
 def _get_num_classes(label_category):
     return NUM_EVENT_CLASSES_MAP[label_category]
