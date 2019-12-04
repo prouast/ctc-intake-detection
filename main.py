@@ -19,13 +19,13 @@ import lstm
 FRAME_SIZE = 128
 LR_BOUNDARIES = [2, 7, 10]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
-LR_DECAY_RATE = 0.5
+LR_DECAY_RATE = 0.4
 LR_DECAY_STEPS = 1
 FLIP_ACC = [1., -1., 1.]
 FLIP_GYRO = [-1., 1., -1.]
 NUM_CHANNELS = 3
 NUM_EVENT_CLASSES_MAP = {"label_1": 1, "label_2": 3, "label_3": 3, "label_4": 6}
-NUM_SHUFFLE = 1000
+NUM_SHUFFLE = 10000
 NUM_TRAINING_FILES = 62
 ORIGINAL_SIZE = 140
 AUTOTUNE = tf.data.experimental.AUTOTUNE
@@ -184,8 +184,8 @@ def train_and_evaluate():
             #    loss_mode=FLAGS.loss_mode, num_event=NUM_EVENT_CLASSES,
             #    use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
             train_predictions, decoded = decode_logits(train_logits,
-                loss_mode="ctc_def_all", num_event=num_event_classes,
-                use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
+                loss_mode="naive_def_none", seq_length=seq_length,
+                num_event=num_event_classes)
 
             # Update metrics
             for i in range(1, num_event_classes + 1):
@@ -265,8 +265,8 @@ def train_and_evaluate():
                     #    loss_mode=FLAGS.loss_mode, num_event=NUM_EVENT_CLASSES,
                     #    use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
                     eval_predictions, decoded = decode_logits(eval_logits,
-                        loss_mode="ctc_def_all", num_event=num_event_classes,
-                        use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
+                        loss_mode="naive_def_none", seq_length=seq_length,
+                        num_event=num_event_classes)
 
                     # Update metric
                     for i in range(1, num_event_classes + 1):
@@ -358,13 +358,20 @@ class Adam(keras.optimizers.Adam):
         """Increment epoch count"""
         return self._epochs.assign_add(1)
 
-def _adjust_labels(labels, seq_pool, seq_length, batch_size):
+def _adjust_labels(labels, seq_pool, seq_length, batch_size=None):
     """If seq_pool performed, adjust seq_length and labels by slicing"""
-    if seq_pool > 1:
-        labels = tf.strided_slice(
-            input_=labels, begin=[0, seq_pool-1], end=[batch_size, seq_length],
-            strides=[1, seq_pool])
-    labels = tf.reshape(labels, [batch_size, int(seq_length/seq_pool)])
+    if batch_size is not None:
+        if seq_pool > 1:
+            labels = tf.strided_slice(
+                input_=labels, begin=[0, seq_pool-1], end=[batch_size, seq_length],
+                strides=[1, seq_pool])
+        labels = tf.reshape(labels, [batch_size, int(seq_length/seq_pool)])
+    else:
+        if seq_pool > 1:
+            labels = tf.strided_slice(
+                input_=labels, begin=[seq_pool-1], end=[seq_length],
+                strides=[seq_pool])
+        labels = tf.reshape(labels, [int(seq_length/seq_pool)])
     return labels
 
 def predict():
@@ -631,8 +638,8 @@ def _get_transformation_parser(is_training):
 
 def _get_not_all_def_label_filter(def_val):
     def predicate_fn(features, labels):
-        return tf.math.greater(tf.reduce_sum(
-            tf.cast(tf.not_equal(labels, def_val), tf.float32)), 0)
+        labels = _adjust_labels(labels, FLAGS.seq_pool, FLAGS.seq_length)
+        return tf.math.greater(tf.reduce_max(labels), def_val)
     return predicate_fn
 
 def _get_num_classes(label_category):
