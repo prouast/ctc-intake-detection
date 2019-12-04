@@ -224,7 +224,7 @@ def _loss_ctc_def_event(labels, logits, batch_size, seq_length, def_val, pad_val
     # Reduce loss to scalar
     return tf.reduce_mean(loss)
 
-@tf.function
+#@tf.function
 def _loss_ctc_ndef_all(labels, logits, batch_size, seq_length, def_val, pad_val, pos='middle'):
     """CTC loss
     - Loss: CTC loss (preprocess_collapse_repeated=TODO, ctc_merge_repeated=TODO)
@@ -236,9 +236,9 @@ def _loss_ctc_ndef_all(labels, logits, batch_size, seq_length, def_val, pad_val,
         def_val=def_val, pad_val=pad_val, mode='remove_def', pos=pos)
     logit_lengths = tf.fill([batch_size], seq_length)
     loss = tf.nn.ctc_loss(
-        labels=labels,
+        labels=_dense_to_sparse(labels, eos_token=-1),
         logits=logits,
-        label_length=label_lengths,
+        label_length=None,
         logit_length=logit_lengths,
         logits_time_major=False,
         blank_index=-1)

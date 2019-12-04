@@ -5,6 +5,7 @@ from absl import app
 from absl import flags
 from absl import logging
 import tensorflow as tf
+import tensorflow_addons as tfa
 from tensorflow.python.platform import gfile
 from tensorflow import keras
 from ctc import decode_logits
@@ -24,7 +25,7 @@ FLIP_ACC = [1., -1., 1.]
 FLIP_GYRO = [-1., 1., -1.]
 NUM_CHANNELS = 3
 NUM_EVENT_CLASSES_MAP = {"label_1": 1, "label_2": 3, "label_3": 3, "label_4": 6}
-NUM_SHUFFLE = 100000
+NUM_SHUFFLE = 1000
 NUM_TRAINING_FILES = 62
 ORIGINAL_SIZE = 140
 AUTOTUNE = tf.data.experimental.AUTOTUNE
@@ -33,7 +34,7 @@ FLAGS = flags.FLAGS
 flags.DEFINE_integer(
     name='batch_size', default=16, help='Batch size used for training.')
 flags.DEFINE_string(
-    name='eval_dir', default='data/raw/eval', help='Directory for val data.')
+    name='eval_dir', default='data/video/eval', help='Directory for val data.')
 flags.DEFINE_integer(
     name='eval_steps', default=250, help='Eval and save best model after every x steps.')
 flags.DEFINE_enum(
@@ -75,7 +76,7 @@ flags.DEFINE_integer(
 flags.DEFINE_integer(
     name='seq_pool', default=1, help='Factor of sequence pooling in the model.')
 flags.DEFINE_string(
-    name='train_dir', default='data/raw/train', help='Directory for training data.')
+    name='train_dir', default='data/video/train', help='Directory for training data.')
 flags.DEFINE_integer(
     name='train_epochs', default=200, help='Number of training epochs.')
 
@@ -96,7 +97,7 @@ def train_and_evaluate():
     num_event_classes = _get_num_classes(FLAGS.label_mode)
     num_classes = num_event_classes + (1 if use_def else 0) + (1 if use_epsilon else 0)
     if FLAGS.model == "video_small_cnn_lstm":
-        model = video_small_cnn_lstm.Model(FLAGS.seq_length, num_classes, FLAGS.l2_lambda)
+        model = video_small_cnn_lstm.Model(num_classes, FLAGS.l2_lambda)
     elif FLAGS.model == "inert_small_cnn_lstm":
         model = inert_small_cnn_lstm.Model(num_classes, FLAGS.l2_lambda)
     elif FLAGS.model == "lstm":
@@ -120,13 +121,13 @@ def train_and_evaluate():
     # Instantiate the metrics
     seq_length = int(FLAGS.seq_length / FLAGS.seq_pool)
     train_metrics = {
-        'mean_precision': tf.keras.metrics.Mean(),
-        'mean_recall': tf.keras.metrics.Mean(),
-        'mean_f1': tf.keras.metrics.Mean()}
+        'mean_precision': keras.metrics.Mean(),
+        'mean_recall': keras.metrics.Mean(),
+        'mean_f1': keras.metrics.Mean()}
     eval_metrics = {
-        'mean_precision': tf.keras.metrics.Mean(),
-        'mean_recall': tf.keras.metrics.Mean(),
-        'mean_f1': tf.keras.metrics.Mean()}
+        'mean_precision': keras.metrics.Mean(),
+        'mean_recall': keras.metrics.Mean(),
+        'mean_f1': keras.metrics.Mean()}
     for i in range(1, num_event_classes + 1):
         other_vals = [j for j in range(1, num_event_classes + 1) if j != i]
         train_metrics['class_{}_precision'.format(i)] = metrics.Precision(
@@ -340,7 +341,7 @@ class Adam(keras.optimizers.Adam):
     def _decayed_lr(self, var_dtype):
         """Get learning rate based on epochs."""
         lr_t = self._get_hyper("learning_rate", var_dtype)
-        if isinstance(lr_t, tf.keras.optimizers.schedules.LearningRateSchedule):
+        if isinstance(lr_t, keras.optimizers.schedules.LearningRateSchedule):
             epochs = tf.cast(self.epochs, var_dtype)
             lr_t = tf.cast(lr_t(epochs), var_dtype)
         return lr_t
@@ -468,6 +469,7 @@ def dataset(is_training, is_predicting, data_dir):
             .map(map_func=_get_input_parser(table),
                 num_parallel_calls=AUTOTUNE)
             .apply(_get_sequence_batch_fn(is_training, is_predicting))
+            #.filter() # TODO only use non-empty labels
             .map(map_func=_get_transformation_parser(is_training),
                 num_parallel_calls=AUTOTUNE),
         cycle_length=4)
@@ -489,7 +491,7 @@ def _get_input_parser(table):
                 'example/image': tf.io.FixedLenFeature([], dtype=tf.string)
         })
         label = tf.cast(features['example/{}'.format(FLAGS.label_mode)], tf.int32)
-        image_data = tf.decode_raw(features['example/image'], tf.uint8)
+        image_data = tf.io.decode_raw(features['example/image'], tf.uint8)
         image_data = tf.cast(image_data, tf.float32)
         image_data = tf.reshape(image_data,
             [ORIGINAL_SIZE, ORIGINAL_SIZE, NUM_CHANNELS])
@@ -539,7 +541,7 @@ def _get_transformation_parser(is_training):
             # Random rotation
             rotation_degree = tf.random.uniform([], -2.0, 2.0)
             rotation_radian = rotation_degree * math.pi / 180
-            image_data = tf.contrib.image.rotate(image_data,
+            image_data = tfa.image.rotate(image_data,
                 angles=rotation_radian)
 
             # Random crop
@@ -557,29 +559,31 @@ def _get_transformation_parser(is_training):
                 false_fn=lambda: image_data)
 
             # Random brightness change
-            def _adjust_brightness(image_data, delta):
-                if tf.shape(image_data)[0] == 4:
-                    brightness = lambda x: tf.image.adjust_brightness(x, delta)
-                    return tf.map_fn(brightness, image_data)
-                else:
-                    return tf.image.adjust_brightness(image_data, delta)
+            #def _adjust_brightness(image_data, delta):
+            #    if tf.shape(image_data)[0] == 4:
+            #        brightness = lambda x: tf.image.adjust_brightness(x, delta)
+            #        return tf.map_fn(brightness, image_data)
+            #    else:
+            #        return tf.image.adjust_brightness(image_data, delta)
             delta = tf.random.uniform([], -63, 63)
-            image_data = _adjust_brightness(image_data, delta)
+            #image_data = _adjust_brightness(image_data, delta)
+            image_data = tf.image.adjust_brightness(image_data, delta)
 
             # Random contrast change -
-            def _adjust_contrast(image_data, contrast_factor):
-                if tf.shape(image_data)[0] == 4:
-                    contrast = lambda x: tf.image.adjust_contrast(x, contrast_factor)
-                    return tf.map_fn(contrast, image_data)
-                else:
-                    return tf.image.adjust_contrast(image_data, contrast_factor)
+            #def _adjust_contrast(image_data, contrast_factor):
+            #    if tf.shape(image_data)[0] == 4:
+            #        contrast = lambda x: tf.image.adjust_contrast(x, contrast_factor)
+            #        return tf.map_fn(contrast, image_data)
+            #    else:
+            #        return tf.image.adjust_contrast(image_data, contrast_factor)
             contrast_factor = tf.random.uniform([], 0.2, 1.8)
-            image_data = _adjust_contrast(image_data, contrast_factor)
+            #image_data = _adjust_contrast(image_data, contrast_factor)
+            image_data = tf.image.adjust_contrast(image_data, contrast_factor)
 
         else:
 
             # Crop the central [height, width].
-            image_data = tf.image.resize_image_with_crop_or_pad(
+            image_data = tf.image.resize_with_crop_or_pad(
                 image_data, FRAME_SIZE, FRAME_SIZE)
             size = [FLAGS.seq_length, FRAME_SIZE, FRAME_SIZE, NUM_CHANNELS]
             image_data.set_shape(size)
@@ -593,7 +597,7 @@ def _get_transformation_parser(is_training):
             variance = tf.nn.relu(variance)
             stddev = tf.sqrt(variance)
             # Apply a minimum normalization that protects us against uniform images.
-            min_stddev = tf.rsqrt(tf.cast(num_pixels, dtype=tf.float32))
+            min_stddev = tf.math.rsqrt(tf.cast(num_pixels, dtype=tf.float32))
             pixel_value_scale = tf.maximum(stddev, min_stddev)
             pixel_value_offset = images_mean
             images = tf.subtract(images, pixel_value_offset)
@@ -636,15 +640,15 @@ def _get_hash_table(label_category):
     elif label_category == 'label_2':
         table = tf.lookup.StaticHashTable(
             tf.lookup.KeyValueTensorInitializer(
-                ["Idle", "Drink", "Eat", "Lick"], [0, 1, 2, 3]), -1)
+                ["Idle", "Eat", "Drink", "Lick"], [0, 1, 2, 3]), -1)
     elif label_category == 'label_3':
         table = tf.lookup.StaticHashTable(
             tf.lookup.KeyValueTensorInitializer(
-                ["Idle", "Both", "Left", "Right"], [0, 1, 2, 3]), -1)
+                ["Idle", "Right", "Left", "Both"], [0, 1, 2, 3]), -1)
     elif label_category == 'label_4':
         table = tf.lookup.StaticHashTable(
             tf.lookup.KeyValueTensorInitializer(
-                ["Idle", "Cup", "Finger", "Fork", "Hand", "Knife", "Spoon"], [0, 1, 2, 3, 4, 5, 6]), -1)
+                ["Idle", "Hand", "Fork", "Spoon", "Knife", "Finger", "Cup"], [0, 1, 2, 3, 4, 5, 6]), -1)
     return table
 
 # Run
