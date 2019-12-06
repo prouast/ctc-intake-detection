@@ -484,7 +484,7 @@ def dataset(is_training, is_predicting, data_dir):
             .map(map_func=_get_input_parser(table),
                 num_parallel_calls=AUTOTUNE)
             .apply(_get_sequence_batch_fn(is_training, is_predicting))
-            .filter(predicate=_get_def_label_filter(is_training))
+            #.filter(predicate=_get_def_label_filter(is_training))
             .map(map_func=_get_transformation_parser(is_training),
                 num_parallel_calls=AUTOTUNE),
         cycle_length=4)
@@ -510,6 +510,7 @@ def _get_input_parser(table):
         image_data = tf.cast(image_data, tf.float32)
         image_data = tf.reshape(image_data,
             [ORIGINAL_SIZE, ORIGINAL_SIZE, NUM_CHANNELS])
+        image_data = tf.divide(image_data, 255) # Convert to [0, 1] range
         return image_data, label
 
     def input_parser_inert(serialized_example):
@@ -574,26 +575,12 @@ def _get_transformation_parser(is_training):
                 false_fn=lambda: image_data)
 
             # Random brightness change
-            #def _adjust_brightness(image_data, delta):
-            #    if tf.shape(image_data)[0] == 4:
-            #        brightness = lambda x: tf.image.adjust_brightness(x, delta)
-            #        return tf.map_fn(brightness, image_data)
-            #    else:
-            #        return tf.image.adjust_brightness(image_data, delta)
-            delta = tf.random.uniform([], -63, 63)
-            #image_data = _adjust_brightness(image_data, delta)
+            delta = tf.random.uniform([], -0.2, 0.2)
             image_data = tf.image.adjust_brightness(image_data, delta)
 
             # Random contrast change -
-            #def _adjust_contrast(image_data, contrast_factor):
-            #    if tf.shape(image_data)[0] == 4:
-            #        contrast = lambda x: tf.image.adjust_contrast(x, contrast_factor)
-            #        return tf.map_fn(contrast, image_data)
-            #    else:
-            #        return tf.image.adjust_contrast(image_data, contrast_factor)
-            contrast_factor = tf.random.uniform([], 0.2, 1.8)
-            #image_data = _adjust_contrast(image_data, contrast_factor)
-            image_data = tf.image.adjust_contrast(image_data, contrast_factor)
+            contrast_factor = tf.random.uniform([], 0.8, 1.2)
+            image_data = tf.image.adjust_contrast(image_data, 1.2)
 
         else:
 

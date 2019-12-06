@@ -237,9 +237,9 @@ def _loss_ctc_ndef_all(labels, logits, batch_size, seq_length, def_val, pad_val,
         def_val=def_val, pad_val=pad_val, mode='remove_def', pos=pos)
     logit_lengths = tf.fill([batch_size], seq_length)
     loss = tf.nn.ctc_loss(
-        labels=_dense_to_sparse(labels, eos_token=-1),
+        labels=labels, #_dense_to_sparse(labels, eos_token=-1),
         logits=logits,
-        label_length=None,
+        label_length=label_lengths, #None,
         logit_length=logit_lengths,
         logits_time_major=False,
         blank_index=0)
