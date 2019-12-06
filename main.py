@@ -73,8 +73,6 @@ flags.DEFINE_integer(
 flags.DEFINE_integer(
     name='seq_length', default=16,
     help='Number of sequence elements.')
-flags.DEFINE_integer(
-    name='seq_pool', default=1, help='Factor of sequence pooling in the model.')
 flags.DEFINE_string(
     name='train_dir', default='data/video/train', help='Directory for training data.')
 flags.DEFINE_integer(
@@ -92,6 +90,7 @@ def train_and_evaluate():
     """Run the experiment."""
 
     # Get the model
+    seq_pool = int(FLAGS.input_fps/FLAGS.seq_fps)
     use_def = 'ndef' not in FLAGS.loss_mode
     use_epsilon = 'ctc' in FLAGS.loss_mode
     num_event_classes = _get_num_classes(FLAGS.label_mode)
@@ -119,7 +118,7 @@ def train_and_evaluate():
     eval_dataset = dataset(is_training=False, is_predicting=False, data_dir=FLAGS.eval_dir)
 
     # Instantiate the metrics
-    seq_length = int(FLAGS.seq_length / FLAGS.seq_pool)
+    seq_length = int(FLAGS.seq_length / seq_pool)
     train_metrics = {
         'mean_precision': keras.metrics.Mean(),
         'mean_recall': keras.metrics.Mean(),
@@ -164,7 +163,7 @@ def train_and_evaluate():
         for step, (train_features, train_labels) in enumerate(train_dataset):
 
             # Adjust seq_length and labels
-            train_labels = _adjust_labels(train_labels, FLAGS.seq_pool,
+            train_labels = _adjust_labels(train_labels, seq_pool,
                 FLAGS.seq_length, FLAGS.batch_size)
 
             # Open a GradientTape to record the operations run during forward pass
@@ -249,7 +248,7 @@ def train_and_evaluate():
                 for i, (eval_features, eval_labels) in enumerate(eval_dataset):
 
                     # Adjust seq_length and labels
-                    eval_labels = _adjust_labels(eval_labels, FLAGS.seq_pool,
+                    eval_labels = _adjust_labels(eval_labels, seq_pool,
                         FLAGS.seq_length, FLAGS.batch_size)
 
                     # Run the forward pass
@@ -376,9 +375,11 @@ def _adjust_labels(labels, seq_pool, seq_length, batch_size=None):
 
 def predict():
     # Get the model
+    seq_pool = int(FLAGS.input_fps/FLAGS.seq_fps)
+    num_event_classes = _get_num_classes(FLAGS.label_mode)
     use_def = 'ndef' not in FLAGS.loss_mode
     use_epsilon = 'ctc' in FLAGS.loss_mode
-    num_classes = _get_num_classes(FLAGS.label_mode) + (1 if use_def else 0) + (1 if use_epsilon else 0)
+    num_classes = num_event_classes + (1 if use_def else 0) + (1 if use_epsilon else 0)
     if FLAGS.model == "video_small_cnn_lstm":
         model = video_small_cnn_lstm.Model(FLAGS.seq_length, num_classes, FLAGS.l2_lambda)
     elif FLAGS.model == "inert_small_cnn_lstm":
@@ -387,7 +388,6 @@ def predict():
         model = lstm.Model(num_classes, FLAGS.l2_lambda)
     # Load weights
     model.load_weights(FLAGS.model_dir)
-    # Instantiate the metrics
     total_tp = 0; total_fp1 = 0; total_fp2 = 0; total_fp3 = 0; total_fn = 0
     # Files for predicting
     filenames = gfile.Glob(os.path.join(FLAGS.eval_dir, "*.tfrecords"))
@@ -399,54 +399,62 @@ def predict():
         # Iterate through batches
         for i, (b_features, b_labels) in enumerate(data):
             # Adjust labels
-            b_labels = _adjust_labels(b_labels, FLAGS.seq_pool,
+            b_labels = _adjust_labels(b_labels, seq_pool,
                 FLAGS.seq_length, FLAGS.batch_size)
             # Run the forward pass
             b_logits = model(b_features, training=False)
             # Collect results
             if i == 0:
-                labels = tf.reshape(b_labels, [-1])
-                logits = tf.reshape(b_logits, [-1, num_classes])
+                labels = b_labels[:, -1]
+                logits = b_logits[:, -1]
             else:
-                labels = tf.concat([labels, b_labels[-1, -1]], 0)
-                logits = tf.concat([logits, b_logits[-1, -1]], 0)
-                print(labels)
-                print(logits)
+                labels = tf.concat([labels, b_labels[:, -1]], 0)
+                logits = tf.concat([logits, b_logits[:, -1]], 0)
         # Predict on video level
         v_seq_length = logits.get_shape()[0]
-        preds_ctc, _ = decode_logits(logits,
-            loss_mode=FLAGS.loss_mode, num_event=NUM_EVENT_CLASSES,
-            use_def=use_def, use_epsilon=use_epsilon, seq_length=v_seq_length)
-        #preds_naive, _ = decode_logits(logits,
-        #    loss_mode='naive_def_none', num_event=NUM_EVENT_CLASSES,
-        #    use_def=use_def, use_epsilon=use_epsilon, seq_length=v_seq_length)
+        #preds, _ = decode_logits(tf.expand_dims(logits, 0),
+        #    loss_mode=FLAGS.loss_mode, seq_length=v_seq_length,
+        #    num_event=num_event_classes)
+        preds, _ = decode_logits(tf.expand_dims(logits, 0),
+            loss_mode='naive_def_none', seq_length=v_seq_length,
+            num_event=num_event_classes)
+        # Instantiate the metrics
+        part_tp = 0; part_fp1 = 0; part_fp2 = 0; part_fp3 = 0; part_fn = 0
         # Update metrics
-        tp, fp1, fp2, fp3, fn = metrics.evaluate_interval_detection(
-            labels=tf.expand_dims(labels, 0), predictions=preds_ctc,
-            event_val=1, def_val=0, seq_length=v_seq_length)
-        pre = tp / (tp + fp1 + fp2 + tf.reduce_sum(fp3))
-        rec = tp / (tp + fn)
+        for i in range(1, num_event_classes + 1):
+            other_vals = [j for j in range(1, num_event_classes + 1) if j != i]
+            tp, fp1, fp2, fp3, fn = metrics.evaluate_interval_detection(
+                labels=tf.expand_dims(labels, 0), predictions=preds,
+                event_val=i, def_val=0, seq_length=v_seq_length,
+                other_vals=other_vals)
+            fp3 = tf.reduce_sum(fp3)
+            part_tp += tp; part_fp1 += fp1; part_fp2 += fp2
+            part_fp3 += fp3; part_fn += fn
+        pre = part_tp / (part_tp + part_fp1 + part_fp2 + part_fp3)
+        rec = part_tp / (part_tp + part_fn)
         f1 = 2 * pre * rec / (pre + rec)
+        # TODO fp3 does not seem to work
         logging.info("TP: {0}, FP1: {1}, FP2: {2}, FP3: {3}, FN: {4}".format(
-            tp.numpy(), fp1.numpy(), fp2.numpy(), fp3.numpy(), fn.numpy()))
+            part_tp.numpy(), part_fp1.numpy(), part_fp2.numpy(), part_fp3.numpy(), part_fn.numpy()))
         logging.info("Precision: {}, Recall: {}".format(
             pre.numpy(), rec.numpy()))
         logging.info("F1: {0}".format(f1.numpy()))
-        total_tp += tp; total_fp1 += fp1; total_fp2 += fp2
-        total_fp3 += tf.reduce_sum(fp3); total_fn += fn
-        preds_ctc = tf.reshape(preds_ctc, [-1])
+        total_tp += part_tp; total_fp1 += part_fp1; total_fp2 += part_fp2
+        total_fp3 += part_fp3; total_fn += part_fn
+        preds = tf.reshape(preds, [-1])
         video_id = os.path.splitext(os.path.basename(filename))[0]
         ids = [video_id] * len(logits)
         logging.info("Writing {0} examples to {1}.csv...".format(len(ids), video_id))
         save_array = np.column_stack((ids, labels.numpy().tolist(),
-            logits.numpy().tolist(), preds_ctc.numpy().tolist()))
+            logits.numpy().tolist(), preds.numpy().tolist()))
         np.savetxt("{0}.csv".format(video_id), save_array, delimiter=",", fmt='%s')
+
     # Print metrics
     logging.info("Finished")
     pre = total_tp / (total_tp + total_fp1 + total_fp2 + total_fp3)
     rec = total_tp / (total_tp + total_fn)
     f1 = 2 * pre * rec / (pre + rec)
-    logging.info("TP: {0}, FP1: {1}, FP2: {2}, FP3: {3}, FN: {3}".format(
+    logging.info("TP: {0}, FP1: {1}, FP2: {2}, FP3: {3}, FN: {4}".format(
         total_tp, total_fp1, total_fp2, total_fp3, total_fn))
     logging.info("Precision: {0}, Recall: {1}".format(pre, rec))
     logging.info("F1: {0}".format(f1))
@@ -476,7 +484,7 @@ def dataset(is_training, is_predicting, data_dir):
             .map(map_func=_get_input_parser(table),
                 num_parallel_calls=AUTOTUNE)
             .apply(_get_sequence_batch_fn(is_training, is_predicting))
-            .filter(predicate=_get_not_all_def_label_filter(def_val=0))
+            .filter(predicate=_get_def_label_filter(is_training))
             .map(map_func=_get_transformation_parser(is_training),
                 num_parallel_calls=AUTOTUNE),
         cycle_length=4)
@@ -636,11 +644,17 @@ def _get_transformation_parser(is_training):
     elif FLAGS.input_mode == "inert":
         return inert_transformation_parser
 
-def _get_not_all_def_label_filter(def_val):
-    def predicate_fn(features, labels):
-        labels = _adjust_labels(labels, FLAGS.seq_pool, FLAGS.seq_length)
-        return tf.math.greater(tf.reduce_max(labels), def_val)
-    return predicate_fn
+def _get_def_label_filter(is_training):
+    if is_training:
+        def predicate_fn(features, labels):
+            seq_pool = int(FLAGS.input_fps/FLAGS.seq_fps)
+            labels = _adjust_labels(labels, seq_pool, FLAGS.seq_length)
+            return tf.math.greater(tf.reduce_max(labels), 0)
+        return predicate_fn
+    else:
+        def predicate_fn(features, labels):
+            return tf.math.greater_equal(tf.reduce_max(labels), 0)
+        return predicate_fn
 
 def _get_num_classes(label_category):
     return NUM_EVENT_CLASSES_MAP[label_category]
