@@ -369,18 +369,17 @@ class Beam:
         return tf.reduce_logsumexp([self.p_b, self.p_nb])
 
 # TODO: Write efficient tf graph version
-def _ctc_decode(inputs, beam_width=10, def_val=-1):
+def _ctc_decode(inputs, beam_width=10, blank=0, def_val=0):
     """Decode with ctc beam search"""
     seq_length, num_events = inputs.shape
-    blank = num_events - 1
 
     # Store the beam entries here
     beams = [Beam(0.0, NEG_INF, tf.constant([], tf.int32))]
 
     # For each sequence step
     for t in range(seq_length):
-        #if t % 1000 == 0:
-        #    logging.info("CTC inference step {0}...".format(t))
+        if t % 1000 == 0:
+            logging.info("CTC inference step {0}...".format(t))
         def _make_new_beams():
           fn = lambda : Beam(NEG_INF, NEG_INF, [])
           return collections.defaultdict(fn)
@@ -412,7 +411,7 @@ def _ctc_decode(inputs, beam_width=10, def_val=-1):
                 tf.concat([beam.bu_seq_nb, [def_val]], 0)))
 
             # B. Extend this beam with a non-blank event
-            for event in range(num_events-1):
+            for event in range(1, num_events):
 
                 # Enter beam with the new prefix
                 new_seq = tf.concat([beam.seq, [event]], 0)
@@ -450,15 +449,13 @@ def _ctc_decode(inputs, beam_width=10, def_val=-1):
 
     best = beams[0]
     bu_seq = best.bu_seq_nb if best.p_nb > best.p_b else best.bu_seq_b
-    bu_seq = tf.add(bu_seq, 1)
 
     # Pad the prefix to seq_length
     paddings = [[0, seq_length-tf.shape(best.seq)[0]]]
-    seq = tf.pad(best.seq + 1, paddings, 'CONSTANT', constant_values=def_val)
+    seq = tf.pad(best.seq, paddings, 'CONSTANT', constant_values=def_val)
 
     return bu_seq, seq
 
-@tf.function
 def _ctc_decode_batch(inputs, beam_width, seq_length, def_val=0, pad_val=-1):
     # Add empty batch dimension if needed
     inputs = tf.cond(
@@ -467,10 +464,10 @@ def _ctc_decode_batch(inputs, beam_width, seq_length, def_val=0, pad_val=-1):
         false_fn=lambda: tf.identity(inputs))
     # Decode each example
     decoded, seq = tf.map_fn(
-        fn=lambda x: _ctc_decode(x, beam_width=beam_width, def_val=-1),
+        fn=lambda x: _ctc_decode(x, beam_width=beam_width, def_val=def_val),
         elems=inputs, dtype=(tf.int32, tf.int32))
     # Collapse sequences in case there are any
-    collapsed, _ = _collapse_sequences(decoded, seq_length, def_val=0,
+    collapsed, _ = _collapse_sequences(decoded, seq_length, def_val=def_val,
         pad_val=-1, mode='replace_collapsed', pos='middle')
     return collapsed, seq
 
