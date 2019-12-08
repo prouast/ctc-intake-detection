@@ -19,7 +19,7 @@ import lstm
 FRAME_SIZE = 128
 LR_BOUNDARIES = [2, 7, 10]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
-LR_DECAY_RATE = 0.4
+LR_DECAY_RATE = 0.75
 LR_DECAY_STEPS = 1
 FLIP_ACC = [1., -1., 1.]
 FLIP_GYRO = [-1., 1., -1.]
@@ -186,17 +186,16 @@ def train_and_evaluate():
                 loss_mode="naive_def_none", seq_length=seq_length,
                 num_event=num_event_classes)
 
-            # Update metrics
-            for i in range(1, num_event_classes + 1):
-                train_metrics['class_{}_precision'.format(i)](train_labels, train_predictions)
-                train_metrics['class_{}_recall'.format(i)](train_labels, train_predictions)
-                train_metrics['class_{}_f1'.format(i)](train_labels, train_predictions)
-                train_metrics['mean_precision'](train_metrics['class_{}_precision'.format(i)].result())
-                train_metrics['mean_recall'](train_metrics['class_{}_recall'.format(i)].result())
-                train_metrics['mean_f1'](train_metrics['class_{}_f1'.format(i)].result())
-
             # Log every FLAGS.log_steps steps.
             if global_step % FLAGS.log_steps == 0:
+                # Update metrics
+                for i in range(1, num_event_classes + 1):
+                    train_metrics['class_{}_precision'.format(i)](train_labels, train_predictions)
+                    train_metrics['class_{}_recall'.format(i)](train_labels, train_predictions)
+                    train_metrics['class_{}_f1'.format(i)](train_labels, train_predictions)
+                    train_metrics['mean_precision'](train_metrics['class_{}_precision'.format(i)].result())
+                    train_metrics['mean_recall'](train_metrics['class_{}_recall'.format(i)].result())
+                    train_metrics['mean_f1'](train_metrics['class_{}_f1'.format(i)].result())
                 # General
                 logging.info('Step %s in epoch %s; global step %s' % (step, epoch, global_step))
                 logging.info('Seen this epoch: %s samples' % ((step + 1) * FLAGS.batch_size))
@@ -273,9 +272,11 @@ def train_and_evaluate():
                         eval_metrics['class_{}_precision'.format(i)](eval_labels, eval_predictions)
                         eval_metrics['class_{}_recall'.format(i)](eval_labels, eval_predictions)
                         eval_metrics['class_{}_f1'.format(i)](eval_labels, eval_predictions)
-                        eval_metrics['mean_precision'](eval_metrics['class_{}_precision'.format(i)].result())
-                        eval_metrics['mean_recall'](eval_metrics['class_{}_recall'.format(i)].result())
-                        eval_metrics['mean_f1'](eval_metrics['class_{}_f1'.format(i)].result())
+
+                for i in range(1, num_event_classes + 1):
+                    eval_metrics['mean_precision'](eval_metrics['class_{}_precision'.format(i)].result())
+                    eval_metrics['mean_recall'](eval_metrics['class_{}_recall'.format(i)].result())
+                    eval_metrics['mean_f1'](eval_metrics['class_{}_f1'.format(i)].result())
 
                 # Console
                 eval_loss = np.mean(eval_losses)
