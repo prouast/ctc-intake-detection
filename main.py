@@ -14,36 +14,40 @@ from model_saver import ModelSaver
 import metrics
 import video_small_cnn_lstm
 import inert_small_cnn_lstm
+import inert_heydarian_cnn_lstm
 import lstm
 
 FRAME_SIZE = 128
-LR_BOUNDARIES = [2, 7, 10]
+LR_BOUNDARIES = [15, 30, 45]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
 LR_DECAY_RATE = 0.75
 LR_DECAY_STEPS = 1
 FLIP_ACC = [1., -1., 1.]
 FLIP_GYRO = [-1., 1., -1.]
 NUM_CHANNELS = 3
-NUM_EVENT_CLASSES_MAP = {"label_1": 1, "label_2": 3, "label_3": 3, "label_4": 6}
-NUM_SHUFFLE = 10000
+NUM_EVENT_CLASSES_MAP = {"label_1": 1, "label_2": 2, "label_3": 3, "label_4": 6}
+NUM_SHUFFLE = 50000
 NUM_TRAINING_FILES = 62
 ORIGINAL_SIZE = 140
 AUTOTUNE = tf.data.experimental.AUTOTUNE
 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer(
-    name='batch_size', default=16, help='Batch size used for training.')
+    name='batch_size', default=128, help='Batch size used for training.')
 flags.DEFINE_string(
-    name='eval_dir', default='data/video/eval', help='Directory for val data.')
+    name='eval_dir', default='data/inert/eval', help='Directory for val data.')
 flags.DEFINE_integer(
-    name='eval_steps', default=250, help='Eval and save best model after every x steps.')
+    name='eval_steps', default=500, help='Eval and save best model after every x steps.')
+flags.DEFINE_integer(
+    name='input_length', default=128,
+    help='Number of input sequence elements.')
 flags.DEFINE_enum(
-    name='input_mode', default="video", enum_values=["video", "inert"],
+    name='input_mode', default="inert", enum_values=["video", "inert"],
     help='What is the input mode')
 flags.DEFINE_integer(
     name='input_features', default=2048, help='Number of input features in fc7 mode.')
 flags.DEFINE_integer(
-    name='input_fps', default=8, help='Frames per seconds in input data.')
+    name='input_fps', default=64, help='Frames per seconds in input data.')
 flags.DEFINE_float(
     name='l2_lambda', default=1e-3, help='l2 regularization lambda.')
 flags.DEFINE_enum(
@@ -52,8 +56,8 @@ flags.DEFINE_enum(
 flags.DEFINE_integer(
     name='log_steps', default=100, help='Log after every x steps.')
 flags.DEFINE_enum(
-    name='loss_mode', default="naive_def_none", enum_values=["ctc_def_all", "ctc_def_event", "ctc_ndef_all", "naive_def_none", "naive_def_event", "cross_def_none"],
-    help='What is the input mode')
+    name='loss_mode', default="ctc_ndef_all", enum_values=["ctc_def_all", "ctc_def_event", "ctc_ndef_all", "naive_def_none", "naive_def_event"],
+    help='What is the loss mode')
 flags.DEFINE_float(
     name='lr_base', default=1e-3, help='Base learning rate.')
 flags.DEFINE_enum(
@@ -63,18 +67,15 @@ flags.DEFINE_enum(
     name='mode', default="train_and_evaluate", enum_values=["train_and_evaluate", "predict"],
     help='What mode should tensorflow be started in')
 flags.DEFINE_enum(
-    name='model', default='video_small_cnn_lstm', enum_values=["lstm", "video_small_cnn_lstm", "inert_small_cnn_lstm"],
-    help='Select the model: {lstm, video_small_cnn_lstm, inert_small_cnn_lstm}')
+    name='model', default='inert_small_cnn_lstm', enum_values=["lstm", "video_small_cnn_lstm", "inert_small_cnn_lstm", "inert_heydarian_cnn_lstm"],
+    help='Select the model: {lstm, video_small_cnn_lstm, inert_small_cnn_lstm, inert_heydarian_cnn_lstm}')
 flags.DEFINE_string(
     name='model_dir', default='run',
     help='Output directory for model and training stats.')
 flags.DEFINE_integer(
     name='seq_fps', default=8, help='Target frames per seconds in sequence generation.')
-flags.DEFINE_integer(
-    name='seq_length', default=16,
-    help='Number of sequence elements.')
 flags.DEFINE_string(
-    name='train_dir', default='data/video/train', help='Directory for training data.')
+    name='train_dir', default='data/inert/train', help='Directory for training data.')
 flags.DEFINE_integer(
     name='train_epochs', default=200, help='Number of training epochs.')
 
@@ -89,16 +90,20 @@ def main(arg=None):
 def train_and_evaluate():
     """Run the experiment."""
 
-    # Get the model
+    # Read the representation choice
     seq_pool = int(FLAGS.input_fps/FLAGS.seq_fps)
     use_def = 'ndef' not in FLAGS.loss_mode
-    use_epsilon = 'ctc' in FLAGS.loss_mode
+    use_blank = 'ctc' in FLAGS.loss_mode
     num_event_classes = _get_num_classes(FLAGS.label_mode)
-    num_classes = num_event_classes + (1 if use_def else 0) + (1 if use_epsilon else 0)
+    num_classes = num_event_classes + (1 if use_def else 0) + (1 if use_blank else 0)
+
+    # Read the model choice
     if FLAGS.model == "video_small_cnn_lstm":
         model = video_small_cnn_lstm.Model(num_classes, FLAGS.l2_lambda)
     elif FLAGS.model == "inert_small_cnn_lstm":
         model = inert_small_cnn_lstm.Model(num_classes, FLAGS.l2_lambda)
+    elif FLAGS.model == "inert_heydarian_cnn_lstm":
+        model = inert_heydarian_cnn_lstm.Model(num_classes, FLAGS.l2_lambda)
     elif FLAGS.model == "lstm":
         model = lstm.Model(num_classes, FLAGS.l2_lambda)
 
@@ -113,12 +118,12 @@ def train_and_evaluate():
             boundaries=LR_BOUNDARIES, values=values.tolist())
     optimizer = Adam(learning_rate=lr_schedule)
 
-    # Get the datasets
+    # Get train and eval dataset
     train_dataset = dataset(is_training=True, is_predicting=False, data_dir=FLAGS.train_dir)
     eval_dataset = dataset(is_training=False, is_predicting=False, data_dir=FLAGS.eval_dir)
 
     # Instantiate the metrics
-    seq_length = int(FLAGS.seq_length / seq_pool)
+    seq_length = int(FLAGS.input_length / seq_pool)
     train_metrics = {
         'mean_precision': keras.metrics.Mean(),
         'mean_recall': keras.metrics.Mean(),
@@ -162,9 +167,9 @@ def train_and_evaluate():
         # Iterate over training batches
         for step, (train_features, train_labels) in enumerate(train_dataset):
 
-            # Adjust seq_length and labels
+            # Adjust labels by slicing if necessary
             train_labels = _adjust_labels(train_labels, seq_pool,
-                FLAGS.seq_length, FLAGS.batch_size)
+                FLAGS.input_length, FLAGS.batch_size)
 
             # Open a GradientTape to record the operations run during forward pass
             with tf.GradientTape() as tape:
@@ -179,20 +184,17 @@ def train_and_evaluate():
             optimizer.apply_gradients(zip(grads, model.trainable_weights))
 
             # Decode logits into predictions
-            #train_predictions, decoded = decode_logits(train_logits,
-            #    loss_mode=FLAGS.loss_mode, num_event=NUM_EVENT_CLASSES,
-            #    use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
-            train_predictions, decoded = decode_logits(train_logits,
-                loss_mode="naive_def_none", seq_length=seq_length,
+            train_predictions_u, train_predictions = decode_logits(train_logits,
+                loss_mode=FLAGS.loss_mode, seq_length=seq_length,
                 num_event=num_event_classes)
 
             # Log every FLAGS.log_steps steps.
             if global_step % FLAGS.log_steps == 0:
                 # Update metrics
                 for i in range(1, num_event_classes + 1):
-                    train_metrics['class_{}_precision'.format(i)](train_labels, train_predictions)
-                    train_metrics['class_{}_recall'.format(i)](train_labels, train_predictions)
-                    train_metrics['class_{}_f1'.format(i)](train_labels, train_predictions)
+                    train_metrics['class_{}_precision'.format(i)](train_labels, train_predictions_u)
+                    train_metrics['class_{}_recall'.format(i)](train_labels, train_predictions_u)
+                    train_metrics['class_{}_f1'.format(i)](train_labels, train_predictions_u)
                     train_metrics['mean_precision'](train_metrics['class_{}_precision'.format(i)].result())
                     train_metrics['mean_recall'](train_metrics['class_{}_recall'.format(i)].result())
                     train_metrics['mean_f1'](train_metrics['class_{}_f1'.format(i)].result())
@@ -248,7 +250,7 @@ def train_and_evaluate():
 
                     # Adjust seq_length and labels
                     eval_labels = _adjust_labels(eval_labels, seq_pool,
-                        FLAGS.seq_length, FLAGS.batch_size)
+                        FLAGS.input_length, FLAGS.batch_size)
 
                     # Run the forward pass
                     eval_logits = model(eval_features, training=False)
@@ -259,19 +261,16 @@ def train_and_evaluate():
                     eval_losses.append(eval_loss.numpy())
 
                     # Decode logits into predictions
-                    #eval_predictions, decoded = decode_logits(eval_logits,
-                    #    loss_mode=FLAGS.loss_mode, num_event=NUM_EVENT_CLASSES,
-                    #    use_def=use_def, use_epsilon=use_epsilon, seq_length=seq_length)
-                    eval_predictions, decoded = decode_logits(eval_logits,
-                        loss_mode="naive_def_none", seq_length=seq_length,
+                    eval_predictions_u, eval_predictions = decode_logits(eval_logits,
+                        loss_mode=FLAGS.loss_mode, seq_length=seq_length,
                         num_event=num_event_classes)
 
                     # Update metric
                     for i in range(1, num_event_classes + 1):
-                        eval_metrics['class_{}_tp_fp1_fp2_fp3_fn'.format(i)](eval_labels, eval_predictions)
-                        eval_metrics['class_{}_precision'.format(i)](eval_labels, eval_predictions)
-                        eval_metrics['class_{}_recall'.format(i)](eval_labels, eval_predictions)
-                        eval_metrics['class_{}_f1'.format(i)](eval_labels, eval_predictions)
+                        eval_metrics['class_{}_tp_fp1_fp2_fp3_fn'.format(i)](eval_labels, eval_predictions_u)
+                        eval_metrics['class_{}_precision'.format(i)](eval_labels, eval_predictions_u)
+                        eval_metrics['class_{}_recall'.format(i)](eval_labels, eval_predictions_u)
+                        eval_metrics['class_{}_f1'.format(i)](eval_labels, eval_predictions_u)
 
                 for i in range(1, num_event_classes + 1):
                     eval_metrics['mean_precision'](eval_metrics['class_{}_precision'.format(i)].result())
@@ -379,10 +378,10 @@ def predict():
     seq_pool = int(FLAGS.input_fps/FLAGS.seq_fps)
     num_event_classes = _get_num_classes(FLAGS.label_mode)
     use_def = 'ndef' not in FLAGS.loss_mode
-    use_epsilon = 'ctc' in FLAGS.loss_mode
-    num_classes = num_event_classes + (1 if use_def else 0) + (1 if use_epsilon else 0)
+    use_blank = 'ctc' in FLAGS.loss_mode
+    num_classes = num_event_classes + (1 if use_def else 0) + (1 if use_blank else 0)
     if FLAGS.model == "video_small_cnn_lstm":
-        model = video_small_cnn_lstm.Model(FLAGS.seq_length, num_classes, FLAGS.l2_lambda)
+        model = video_small_cnn_lstm.Model(FLAGS.input_length, num_classes, FLAGS.l2_lambda)
     elif FLAGS.model == "inert_small_cnn_lstm":
         model = inert_small_cnn_lstm.Model(num_classes, FLAGS.l2_lambda)
     elif FLAGS.model == "lstm":
@@ -391,7 +390,7 @@ def predict():
     model.load_weights(FLAGS.model_dir)
     total_tp = 0; total_fp1 = 0; total_fp2 = 0; total_fp3 = 0; total_fn = 0
     # Files for predicting
-    filenames = gfile.Glob(os.path.join(FLAGS.eval_dir, "*.tfrecords"))
+    filenames = gfile.Glob(os.path.join(FLAGS.eval_dir, "*.tfrecord"))
     # For each filename, export logits
     for filename in filenames:
         logging.info("Working on {0}.".format(filename))
@@ -401,7 +400,7 @@ def predict():
         for i, (b_features, b_labels) in enumerate(data):
             # Adjust labels
             b_labels = _adjust_labels(b_labels, seq_pool,
-                FLAGS.seq_length, FLAGS.batch_size)
+                FLAGS.input_length, FLAGS.batch_size)
             # Run the forward pass
             b_logits = model(b_features, training=False)
             # Collect results
@@ -413,11 +412,8 @@ def predict():
                 logits = tf.concat([logits, b_logits[:, -1]], 0)
         # Predict on video level
         v_seq_length = logits.get_shape()[0]
-        #preds, _ = decode_logits(tf.expand_dims(logits, 0),
-        #    loss_mode=FLAGS.loss_mode, seq_length=v_seq_length,
-        #    num_event=num_event_classes)
         preds, _ = decode_logits(tf.expand_dims(logits, 0),
-            loss_mode='naive_def_none', seq_length=v_seq_length,
+            loss_mode=FLAGS.loss_mode, seq_length=v_seq_length,
             num_event=num_event_classes)
         # Instantiate the metrics
         part_tp = 0; part_fp1 = 0; part_fp2 = 0; part_fp3 = 0; part_fn = 0
@@ -466,7 +462,7 @@ def dataset(is_training, is_predicting, data_dir):
     if is_predicting:
         filenames = [data_dir]
     else:
-        filenames = gfile.Glob(os.path.join(data_dir, "*.tfrecords"))
+        filenames = gfile.Glob(os.path.join(data_dir, "*.tfrecord"))
     if not filenames:
         raise RuntimeError('No files found.')
     logging.info("Found {0} files.".format(str(len(filenames))))
@@ -541,11 +537,11 @@ def _get_sequence_batch_fn(is_training, is_predicting):
     if is_training or is_predicting:
         shift = int(FLAGS.input_fps/FLAGS.seq_fps)
     else:
-        shift = FLAGS.seq_length
+        shift = FLAGS.input_length
     return lambda dataset: dataset.window(
-        size=FLAGS.seq_length, shift=shift, drop_remainder=True).flat_map(
+        size=FLAGS.input_length, shift=shift, drop_remainder=True).flat_map(
             lambda f_w, l_w: tf.data.Dataset.zip(
-                (f_w.batch(FLAGS.seq_length), l_w.batch(FLAGS.seq_length))))
+                (f_w.batch(FLAGS.input_length), l_w.batch(FLAGS.input_length))))
 
 def _get_transformation_parser(is_training):
     """Return the data transformation parser."""
@@ -566,7 +562,7 @@ def _get_transformation_parser(is_training):
             limit = [1, diff, diff, 1]
             offset = tf.random.uniform(shape=tf.shape(limit),
                 dtype=tf.int32, maxval=tf.int32.max) % limit
-            size = [FLAGS.seq_length, FRAME_SIZE, FRAME_SIZE, NUM_CHANNELS]
+            size = [FLAGS.input_length, FRAME_SIZE, FRAME_SIZE, NUM_CHANNELS]
             image_data = tf.slice(image_data, offset, size)
 
             # Random horizontal flip
@@ -588,7 +584,7 @@ def _get_transformation_parser(is_training):
             # Crop the central [height, width].
             image_data = tf.image.resize_with_crop_or_pad(
                 image_data, FRAME_SIZE, FRAME_SIZE)
-            size = [FLAGS.seq_length, FRAME_SIZE, FRAME_SIZE, NUM_CHANNELS]
+            size = [FLAGS.input_length, FRAME_SIZE, FRAME_SIZE, NUM_CHANNELS]
             image_data.set_shape(size)
 
         # Subtract off the mean and divide by the variance of the pixels.
@@ -636,7 +632,7 @@ def _get_def_label_filter(is_training):
     if is_training:
         def predicate_fn(features, labels):
             seq_pool = int(FLAGS.input_fps/FLAGS.seq_fps)
-            labels = _adjust_labels(labels, seq_pool, FLAGS.seq_length)
+            labels = _adjust_labels(labels, seq_pool, FLAGS.input_length)
             return tf.math.greater(tf.reduce_max(labels), 0)
         return predicate_fn
     else:
@@ -655,7 +651,7 @@ def _get_hash_table(label_category):
     elif label_category == 'label_2':
         table = tf.lookup.StaticHashTable(
             tf.lookup.KeyValueTensorInitializer(
-                ["Idle", "Eat", "Drink", "Lick"], [0, 1, 2, 3]), -1)
+                ["Idle", "Eat", "Drink"], [0, 1, 2]), -1)
     elif label_category == 'label_3':
         table = tf.lookup.StaticHashTable(
             tf.lookup.KeyValueTensorInitializer(

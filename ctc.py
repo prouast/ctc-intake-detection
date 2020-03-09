@@ -3,6 +3,7 @@
 import tensorflow as tf
 import collections
 from absl import logging
+from tensorflow_ctc_beam_search_u_decoder import ctc_beam_search_u_decoder
 
 NEG_INF = -float("inf")
 
@@ -185,15 +186,16 @@ def _compute_balanced_sample_weight(labels):
 
 @tf.function
 def _loss_ctc_def_all(labels, logits, batch_size, seq_length, def_val, pad_val, pos='middle'):
-    """CTC loss
-    - Loss: CTC loss (preprocess_collapse_repeated=True, ctc_merge_repeated=True)
-    - Representation: Keep {event_val, def_val}
-    - Collapse: Collapse all vals before loss
+    """CTC loss for representation def_all
+    - Loss: CTC loss (preprocess_collapse_repeated=True, ctc_merge_repeated=False)
+    - Representation: Keep {event_val, def_val}, use default values
+    - Collapse: Collapse {event_val, def_val} before loss {e.g., 01020-1-1-1}
+    # index num_classes-1 is blank label
     """
     # CTC loss with all collapsed labels including def_val
     seq_lengths = tf.fill([batch_size], seq_length)
     loss = tf.compat.v1.nn.ctc_loss(
-        labels=_dense_to_sparse(labels, eos_token=-1),
+        labels=_dense_to_sparse(labels, eos_token=pad_val),
         inputs=logits,
         sequence_length=seq_lengths,
         preprocess_collapse_repeated=True,
@@ -204,18 +206,19 @@ def _loss_ctc_def_all(labels, logits, batch_size, seq_length, def_val, pad_val, 
 
 @tf.function
 def _loss_ctc_def_event(labels, logits, batch_size, seq_length, def_val, pad_val, pos='middle'):
-    """CTC loss
+    """CTC loss for representation def_event
     - Loss: CTC loss (preprocess_collapse_repeated=False, ctc_merge_repeated=False)
-    - Representation: Keep {event_val, def_val}
-    - Collapse: Collapse event_val before loss (pad ends)
+    - Representation: Keep {event_val, def_val}, use default values
+    - Collapse: Collapse {event_val} before loss (pad ends) {e.g., 0010200-1-1-1}
+    # index num_classes-1 is blank label
     """
-    # Collapse repeated non-def_val's in labels without replacing
+    # Collapse repeated event_val in labels without replacing
     labels, _ = _collapse_sequences(labels, seq_length,
         def_val=def_val, pad_val=pad_val, mode='remove_collapsed', pos=pos)
     # CTC loss with selectively collapsed labels
     seq_lengths = tf.fill([batch_size], seq_length)
     loss = tf.compat.v1.nn.ctc_loss(
-        labels=_dense_to_sparse(labels, eos_token=-1),
+        labels=_dense_to_sparse(labels, eos_token=pad_val),
         inputs=logits,
         sequence_length=seq_lengths,
         preprocess_collapse_repeated=False,
@@ -226,18 +229,18 @@ def _loss_ctc_def_event(labels, logits, batch_size, seq_length, def_val, pad_val
 
 @tf.function
 def _loss_ctc_ndef_all(labels, logits, batch_size, seq_length, def_val, pad_val, pos='middle'):
-    """CTC loss
-    - Loss: CTC loss (preprocess_collapse_repeated=TODO, ctc_merge_repeated=TODO)
-    - Representation: Keep {event_val} only
-    - Collapse: Collapse event_val before loss (pad ends)
-    # 0 / index 0 is blank label
+    """CTC loss for representation ndef_all
+    - Loss: CTC loss (preprocess_collapse_repeated=False, ctc_merge_repeated=True)
+    - Representation: Keep {event_val} only, no default values
+    - Collapse: Collapse event_val before loss (pad ends) {e.g., 12-1-1-1}
+    # index 0 is blank label
     """
     # Collapse repeated events in labels, remove all def_val
     labels, label_lengths = _collapse_sequences(labels, seq_length,
         def_val=def_val, pad_val=pad_val, mode='remove_def', pos=pos)
     logit_lengths = tf.fill([batch_size], seq_length)
     loss = tf.nn.ctc_loss(
-        labels=labels, #_dense_to_sparse(labels, eos_token=-1),
+        labels=labels, #_dense_to_sparse(labels, eos_token=pad_val),
         logits=logits,
         label_length=label_lengths, #None,
         logit_length=logit_lengths,
@@ -248,10 +251,13 @@ def _loss_ctc_ndef_all(labels, logits, batch_size, seq_length, def_val, pad_val,
 
 @tf.function
 def _loss_naive_def_none(labels, logits, batch_size, seq_length):
-    """Naive CTC loss with no collapse
+    """Naive CTC loss for representation def_none (no collapse)
     This loss only considers the probability of the single path
         implied by the labels without any collapsing. Loss is computed as the
         negative log likelihood of the probability.
+    - Loss: Naive CTC loss that takes sum(logs of logits at label indices)
+    - Representation: Keep everything {e.g., 0011102200}
+    - Collapse: None
     """
     logits = tf.nn.softmax(logits)
     flat_labels = tf.reshape(labels, [-1])
@@ -268,11 +274,14 @@ def _loss_naive_def_none(labels, logits, batch_size, seq_length):
 
 @tf.function
 def _loss_naive_def_event(labels, logits, batch_size, seq_length, def_val, pad_val, pos='middle'):
-    """Naive CTC loss with event collapse
+    """Naive CTC loss for representation def_event (with event collapse)
     This loss only considers the probability of the single path
         implied by the labels after collapsing events to a single element and
         replacing with def_val. Loss is computed as the negative log
         likelihood of the probability.
+    - Loss: Naive CTC loss that takes sum(logs of logits at label indices)
+    - Representation: Keep everything {e.g., 0001002000}
+    - Collapse: Collapse event_val, replacing with def_val.
     """
     # Get weights from non-collapsed labels
     sample_weights = _compute_balanced_sample_weight(tf.reshape(labels, [-1]))
@@ -318,14 +327,14 @@ def loss(labels, logits, loss_mode, batch_size, seq_length, def_val, pad_val, po
 ##### Decoding
 
 @tf.function
-def _greedy_decode(inputs, seq_length, def_index, epsilon_index, shift=0, def_val=0):
+def _greedy_decode(inputs, seq_length, def_index, blank_index, shift=0, def_val=0):
     """Naive inference by retrieving most likely output at each time-step.
 
     Args:
         inputs: The prediction in form of logits. [batch_size, time_steps, num_classes]
         seq_length: The length of the sequences
         def_index: The index of the default event which will be set to def_val (or None)
-        epsilon_index: The index of epsilon which will be set to def_val (or None)
+        blank_index: The index of blank which will be set to def_val (or None)
         shift: How far are events' indices from their values
         def_val: The value associated with the default event
     Returns:
@@ -338,153 +347,55 @@ def _greedy_decode(inputs, seq_length, def_index, epsilon_index, shift=0, def_va
         # Set def_index to def_val
         decoded = tf.where(tf.equal(decoded, def_index-shift),
             tf.fill([seq_length], def_val), decoded)
-    if epsilon_index is not None:
+    if blank_index is not None:
         # Set epsilon_index to def_val
-        decoded = tf.where(tf.equal(decoded, epsilon_index-shift),
+        decoded = tf.where(tf.equal(decoded, blank_index-shift),
             tf.fill([seq_length], def_val), decoded)
     return decoded
 
 @tf.function
-def _greedy_decode_and_collapse(inputs, seq_length, def_index, epsilon_index, shift=0, def_val=0, pad_val=-1, pos='middle'):
+def _greedy_decode_and_collapse(inputs, seq_length, def_index, blank_index, shift=0, def_val=0, pad_val=-1, pos='middle'):
     """Retrieve most likely output at each time-step and collapse predictions."""
     decoded = _greedy_decode(inputs, seq_length=seq_length, def_index=def_index,
-        epsilon_index=epsilon_index, shift=shift, def_val=def_val)
+        blank_index=blank_index, shift=shift, def_val=def_val)
     collapsed, _ = _collapse_sequences(decoded, seq_length, def_val=def_val,
         pad_val=pad_val, mode='replace_collapsed', pos=pos)
     return collapsed, decoded
 
-class Beam:
-    def __init__(self, p_b, p_nb, seq):
-        self.p_b = p_b
-        self.p_nb = p_nb
-        self.seq = seq
-        self.bu_seq_nb = tf.constant([], tf.int32)
-        self.bu_seq_b = tf.constant([], tf.int32)
-        self.bu_seq_nb_cand = [(NEG_INF, self.bu_seq_nb)] # list of bu_seq_nb merging candidates for current step with probabilities
-        self.bu_seq_b_cand = [(NEG_INF, self.bu_seq_b)] # list of bu_seq_nb merging candidates for current step with probabilities
-    def __str__(self):
-        return  "Beam [seq = %s, p_b = %s, p_nb = %s, bu_seq_b = %s, bu_seq_nb = %s]" \
-            % (self.seq, self.p_b, self.p_nb, self.bu_seq_b, self.bu_seq_nb)
-    def get_p(self):
-        return tf.reduce_logsumexp([self.p_b, self.p_nb])
-
-# TODO: Write efficient tf graph version
-def _ctc_decode(inputs, beam_width=10, blank=0, def_val=0):
-    """Decode with ctc beam search"""
-    seq_length, num_events = inputs.shape
-
-    # Store the beam entries here
-    beams = [Beam(0.0, NEG_INF, tf.constant([], tf.int32))]
-
-    # For each sequence step
-    for t in range(seq_length):
-        if t % 1000 == 0:
-            logging.info("CTC inference step {0}...".format(t))
-        def _make_new_beams():
-          fn = lambda : Beam(NEG_INF, NEG_INF, [])
-          return collections.defaultdict(fn)
-        new_beams = _make_new_beams()
-
-        # For all existing beams
-        for beam in beams:
-
-            # A. Enter this beam into new proposals if not already there
-            new_beam = new_beams[str(beam.seq)]
-            new_beam.seq = beam.seq
-
-            # A. 1) Case of non-empty beam with repeated last event
-            if tf.size(beam.seq) > 0:
-                new_beam.p_nb = tf.reduce_logsumexp([new_beam.p_nb,
-                    beam.p_nb + inputs[t, beam.seq[-1]]])
-                new_beam.bu_seq_nb_cand.append((
-                    tf.reduce_logsumexp([beam.p_nb + inputs[t, beam.seq[-1]]]),
-                    tf.concat([beam.bu_seq_nb, [beam.seq[-1]]], 0)))
-
-            # A. 2) Case of adding a blank event
-            new_beam.p_b = tf.reduce_logsumexp([new_beam.p_b,
-                beam.p_b + inputs[t, blank], beam.p_nb + inputs[t, blank]])
-            new_beam.bu_seq_b_cand.append((
-                tf.reduce_logsumexp([beam.p_b + inputs[t, blank]]),
-                tf.concat([beam.bu_seq_b, [def_val]], 0)))
-            new_beam.bu_seq_b_cand.append((
-                tf.reduce_logsumexp([beam.p_nb + inputs[t, blank]]),
-                tf.concat([beam.bu_seq_nb, [def_val]], 0)))
-
-            # B. Extend this beam with a non-blank event
-            for event in range(1, num_events):
-
-                # Enter beam with the new prefix
-                new_seq = tf.concat([beam.seq, [event]], 0)
-                new_beam = new_beams[str(new_seq)]
-                new_beam.seq = new_seq
-
-                # B. 1) Case of repeated event at the end in prefix
-                if tf.size(beam.seq) > 0 and beam.seq[-1] == event:
-                    # Only consider seqs ending with blank event
-                    new_beam.p_nb = tf.reduce_logsumexp([new_beam.p_nb,
-                        beam.p_b + inputs[t, event]])
-                    new_beam.bu_seq_nb_cand.append((
-                        tf.reduce_logsumexp([beam.p_b + inputs[t, event]]),
-                        tf.concat([beam.bu_seq_b, [event]], 0)))
-                # B. 2) Case of no repeated event
-                else:
-                    new_beam.p_nb = tf.reduce_logsumexp([new_beam.p_nb,
-                        beam.p_b + inputs[t, event], beam.p_nb + inputs[t, event]])
-                    new_beam.bu_seq_nb_cand.append((
-                        tf.reduce_logsumexp([beam.p_b + inputs[t, event]]),
-                        tf.concat([beam.bu_seq_b, [event]], 0)))
-                    new_beam.bu_seq_nb_cand.append((
-                        tf.reduce_logsumexp([beam.p_nb + inputs[t, event]]),
-                        tf.concat([beam.bu_seq_nb, [event]], 0)))
-
-        # Sort and trim the beam at the end of each sequence step
-        beams = sorted(new_beams.values(),
-            key=lambda x: x.get_p(), reverse=True)
-        beams = beams[:beam_width]
-
-        # Resolve the most likely bu_prefix to each beam.
-        for beam in beams:
-            beam.bu_seq_nb = sorted(beam.bu_seq_nb_cand, key=lambda x: x[0], reverse=True)[0][1]
-            beam.bu_seq_b = sorted(beam.bu_seq_b_cand, key=lambda x: x[0], reverse=True)[0][1]
-
-    best = beams[0]
-    bu_seq = best.bu_seq_nb if best.p_nb > best.p_b else best.bu_seq_b
-
-    # Pad the prefix to seq_length
-    paddings = [[0, seq_length-tf.shape(best.seq)[0]]]
-    seq = tf.pad(best.seq, paddings, 'CONSTANT', constant_values=def_val)
-
-    return bu_seq, seq
-
-def _ctc_decode_batch(inputs, beam_width, seq_length, def_val=0, pad_val=-1):
-    # Add empty batch dimension if needed
-    inputs = tf.cond(
-        pred=tf.equal(tf.size(tf.shape(inputs)), 2),
-        true_fn=lambda: tf.expand_dims(inputs, 0),
-        false_fn=lambda: tf.identity(inputs))
-    # Decode each example
-    decoded, seq = tf.map_fn(
-        fn=lambda x: _ctc_decode(x, beam_width=beam_width, def_val=def_val),
-        elems=inputs, dtype=(tf.int32, tf.int32))
-    # Collapse sequences in case there are any
-    collapsed, _ = _collapse_sequences(decoded, seq_length, def_val=def_val,
-        pad_val=-1, mode='replace_collapsed', pos='middle')
-    return collapsed, seq
+def _ctc_decode(inputs, seq_length, blank_index, def_val=0, pos='middle'):
+    """Perform ctc decoding"""
+    batch_size = inputs.get_shape()[0]
+    # Decode uses time major
+    inputs = tf.transpose(a=inputs, perm=[1, 0, 2])
+    seq_lengths = tf.fill([batch_size], seq_length)
+    indices, values, shape, indices_u, values_u, shape_u, log_probs = ctc_beam_search_u_decoder(
+        inputs=inputs, sequence_length=seq_lengths,
+        beam_width=15, blank_index=blank_index, top_paths=1,
+        blank_label=blank_index)
+    decoded = tf.sparse.SparseTensor(indices[0], values[0], shape[0])
+    decoded = tf.cast(tf.sparse.to_dense(decoded), tf.int32)
+    decoded_u = tf.sparse.SparseTensor(indices_u[0], values_u[0], shape_u[0])
+    decoded_u = tf.cast(tf.sparse.to_dense(decoded_u), tf.int32)
+    # Collapse sequences of events
+    decoded_u, _ = _collapse_sequences(decoded_u, seq_length=seq_length,
+        def_val=def_val, pad_val=-1, mode='replace_collapsed', pos=pos)
+    return decoded_u, decoded
 
 def decode_logits(logits, loss_mode, seq_length, num_event):
     """Decode ctc logits corresponding to loss_mode"""
 
     if loss_mode == 'ctc_def_all':
         return _greedy_decode_and_collapse(logits, seq_length=seq_length,
-            def_index=0, epsilon_index=num_event+1)
+            def_index=0, def_val=0, blank_index=num_event+1)
     elif loss_mode == 'ctc_def_event':
         return _greedy_decode_and_collapse(logits, seq_length=seq_length,
-            def_index=0, epsilon_index=num_event+1)
+            def_index=0, def_val=0, blank_index=num_event+1)
     elif loss_mode == 'ctc_ndef_all':
-        return _ctc_decode_batch(logits, beam_width=5, seq_length=seq_length)
+        return _ctc_decode(logits, seq_length=seq_length, blank_index=0,
+            def_val=0)
     elif loss_mode == 'naive_def_none':
         return _greedy_decode_and_collapse(logits, seq_length=seq_length,
-            def_index=0, epsilon_index=None)
+            def_index=0, def_val=0, blank_index=None)
     elif loss_mode == 'naive_def_event':
         return _greedy_decode_and_collapse(logits, seq_length=seq_length,
-            def_index=0, epsilon_index=None)
+            def_index=0, def_val=0, blank_index=None)
