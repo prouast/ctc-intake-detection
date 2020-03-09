@@ -400,7 +400,7 @@ def predict():
     elif FLAGS.model == "lstm":
         model = lstm.Model(num_classes, L2_LAMBDA)
     # Load weights
-    model.load_weights(FLAGS.model_dir)
+    model.load_weights(os.path.join(FLAGS.model_dir, "checkpoints/model_1500"))
     total_tp = 0; total_fp1 = 0; total_fp2 = 0; total_fp3 = 0; total_fn = 0
     # Files for predicting
     filenames = gfile.Glob(os.path.join(FLAGS.eval_dir, "*.tfrecord"))
@@ -457,7 +457,9 @@ def predict():
         logging.info("Writing {0} examples to {1}.csv...".format(len(ids), video_id))
         save_array = np.column_stack((ids, labels.numpy().tolist(),
             logits.numpy().tolist(), preds.numpy().tolist()))
-        np.savetxt("{0}.csv".format(video_id), save_array, delimiter=",", fmt='%s')
+        if not os.path.exists("predict"):
+            os.makedirs("predict")
+        np.savetxt("predict/{0}.csv".format(video_id), save_array, delimiter=",", fmt='%s')
 
     # Print metrics
     logging.info("Finished")
