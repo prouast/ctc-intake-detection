@@ -1,6 +1,7 @@
 """Using CTC for detection of events."""
 
 import tensorflow as tf
+import tensorflow_addons as tfa
 import collections
 from absl import logging
 from tensorflow_ctc_beam_search_u_decoder import ctc_beam_search_u_decoder
@@ -170,66 +171,23 @@ def _dense_to_sparse(input, eos_token=-1):
     return sparse
 
 def _compute_balanced_sample_weight(labels):
-    """Calculate the balanced sample weight for imbalanced data."""
-    f_labels = tf.reshape(labels,[-1]) if labels.get_shape().ndims == 2 else labels
-    y, idx, count = tf.unique_with_counts(f_labels)
-    total_count = tf.size(f_labels)
-    label_count = tf.size(y)
-    calc_weight = lambda x: tf.divide(tf.divide(total_count, x),
-        tf.cast(label_count, tf.float64))
-    class_weights = tf.map_fn(fn=calc_weight, elems=count, dtype=tf.float64)
-    sample_weights = tf.gather(class_weights, idx)
-    sample_weights = tf.reshape(sample_weights, tf.shape(labels))
-    return tf.cast(sample_weights, tf.float32)
+        """Calculate the balanced sample weight for imbalanced data."""
+        f_labels = tf.reshape(labels,[-1]) if labels.get_shape().ndims == 2 else labels
+        y, idx, count = tf.unique_with_counts(f_labels)
+        total_count = tf.size(f_labels)
+        label_count = tf.size(y)
+        calc_weight = lambda x: tf.divide(tf.divide(total_count, x),
+            tf.cast(label_count, tf.float64))
+        class_weights = tf.map_fn(fn=calc_weight, elems=count, dtype=tf.float64)
+        sample_weights = tf.gather(class_weights, idx)
+        sample_weights = tf.reshape(sample_weights, tf.shape(labels))
+        return tf.cast(sample_weights, tf.float32)
 
 ##### Loss functions
 
 @tf.function
-def _loss_ctc_def_all(labels, logits, batch_size, seq_length, def_val, pad_val, pos='middle'):
-    """CTC loss for representation def_all
-    - Loss: CTC loss (preprocess_collapse_repeated=True, ctc_merge_repeated=False)
-    - Representation: Keep {event_val, def_val}, use default values
-    - Collapse: Collapse {event_val, def_val} before loss {e.g., 01020-1-1-1}
-    # index num_classes-1 is blank label
-    """
-    # CTC loss with all collapsed labels including def_val
-    seq_lengths = tf.fill([batch_size], seq_length)
-    loss = tf.compat.v1.nn.ctc_loss(
-        labels=_dense_to_sparse(labels, eos_token=pad_val),
-        inputs=logits,
-        sequence_length=seq_lengths,
-        preprocess_collapse_repeated=True,
-        ctc_merge_repeated=False,
-        time_major=False)
-    # Reduce loss to scalar
-    return tf.reduce_mean(loss)
-
-@tf.function
-def _loss_ctc_def_event(labels, logits, batch_size, seq_length, def_val, pad_val, pos='middle'):
-    """CTC loss for representation def_event
-    - Loss: CTC loss (preprocess_collapse_repeated=False, ctc_merge_repeated=False)
-    - Representation: Keep {event_val, def_val}, use default values
-    - Collapse: Collapse {event_val} before loss (pad ends) {e.g., 0010200-1-1-1}
-    # index num_classes-1 is blank label
-    """
-    # Collapse repeated event_val in labels without replacing
-    labels, _ = _collapse_sequences(labels, seq_length,
-        def_val=def_val, pad_val=pad_val, mode='remove_collapsed', pos=pos)
-    # CTC loss with selectively collapsed labels
-    seq_lengths = tf.fill([batch_size], seq_length)
-    loss = tf.compat.v1.nn.ctc_loss(
-        labels=_dense_to_sparse(labels, eos_token=pad_val),
-        inputs=logits,
-        sequence_length=seq_lengths,
-        preprocess_collapse_repeated=False,
-        ctc_merge_repeated=False,
-        time_major=False)
-    # Reduce loss to scalar
-    return tf.reduce_mean(loss)
-
-@tf.function
-def _loss_ctc_ndef_all(labels, logits, batch_size, seq_length, def_val, pad_val, pos='middle'):
-    """CTC loss for representation ndef_all
+def _loss_ctc(labels, logits, batch_size, seq_length, def_val, pad_val, blank_index, pos='middle'):
+    """CTC loss
     - Loss: CTC loss (preprocess_collapse_repeated=False, ctc_merge_repeated=True)
     - Representation: Keep {event_val} only, no default values
     - Collapse: Collapse event_val before loss (pad ends) {e.g., 12-1-1-1}
@@ -240,24 +198,25 @@ def _loss_ctc_ndef_all(labels, logits, batch_size, seq_length, def_val, pad_val,
         def_val=def_val, pad_val=pad_val, mode='remove_def', pos=pos)
     logit_lengths = tf.fill([batch_size], seq_length)
     loss = tf.nn.ctc_loss(
-        labels=labels, #_dense_to_sparse(labels, eos_token=pad_val),
+        labels=labels,
         logits=logits,
-        label_length=label_lengths, #None,
+        label_length=label_lengths,
         logit_length=logit_lengths,
         logits_time_major=False,
-        blank_index=0)
+        blank_index=blank_index)
     # Reduce loss to scalar
     return tf.reduce_mean(loss)
 
 @tf.function
-def _loss_naive_def_none(labels, logits, batch_size, seq_length):
-    """Naive CTC loss for representation def_none (no collapse)
+def _loss_naive(labels, logits, batch_size, seq_length):
+    """Naive CTC loss (no collapse)
     This loss only considers the probability of the single path
         implied by the labels without any collapsing. Loss is computed as the
         negative log likelihood of the probability.
     - Loss: Naive CTC loss that takes sum(logs of logits at label indices)
-    - Representation: Keep everything {e.g., 0011102200}
+    - Representation: Keep everything, index 0 is blank label {e.g., 0011102200}
     - Collapse: None
+    # index 0 is blank label
     """
     logits = tf.nn.softmax(logits)
     flat_labels = tf.reshape(labels, [-1])
@@ -273,96 +232,61 @@ def _loss_naive_def_none(labels, logits, batch_size, seq_length):
     return loss
 
 @tf.function
-def _loss_naive_def_event(labels, logits, batch_size, seq_length, def_val, pad_val, pos='middle'):
-    """Naive CTC loss for representation def_event (with event collapse)
-    This loss only considers the probability of the single path
-        implied by the labels after collapsing events to a single element and
-        replacing with def_val. Loss is computed as the negative log
-        likelihood of the probability.
-    - Loss: Naive CTC loss that takes sum(logs of logits at label indices)
-    - Representation: Keep everything {e.g., 0001002000}
-    - Collapse: Collapse event_val, replacing with def_val.
-    """
-    # Get weights from non-collapsed labels
-    sample_weights = _compute_balanced_sample_weight(tf.reshape(labels, [-1]))
-    # Collapse sequences to make lstm learn to predict only once per event
-    labels, _ = _collapse_sequences(labels, seq_length,
-        def_val=def_val, pad_val=pad_val, mode='replace_collapsed', pos=pos)
-    logits = tf.nn.softmax(logits)
-    flat_labels = tf.reshape(labels, [-1])
-    flat_logits = tf.reshape(logits, [-1])
-    # Reduce num_classes by getting indexes that should have high logits
-    flat_idx = flat_labels + tf.cast(tf.range(tf.shape(logits)[0] * \
-        tf.shape(logits)[1]) * tf.shape(logits)[2], tf.int32)
-    flat_loss = tf.gather(flat_logits, flat_idx)
-    # Negative log
-    flat_loss = tf.negative(tf.math.log(flat_loss))
-    # Weigh with balanced sample weight across seq_length
-    #sample_weights = _compute_balanced_sample_weight(flat_labels)
-    flat_loss = tf.multiply(flat_loss, sample_weights)
-    loss = tf.reshape(flat_loss, [batch_size, seq_length])
-    # Reduce seq_length by sum
-    loss = tf.reduce_sum(loss, axis=1)
-    # Reduce mean of batch losses
-    return tf.reduce_mean(loss)
+def _loss_crossent(labels, logits):
+    """Cross-entropy loss"""
+    weights = tf.ones_like(labels, dtype=tf.float32)
+    # Calculate and scale cross entropy
+    loss = tfa.seq2seq.sequence_loss(
+        logits=logits,
+        targets=tf.cast(labels, tf.int32),
+        weights=weights)
+    return loss
 
-def loss(labels, logits, loss_mode, batch_size, seq_length, def_val, pad_val, pos='middle'):
+def loss(labels, logits, loss_mode, batch_size, seq_length, def_val, pad_val, blank_index, pos='middle'):
     """Return loss corresponding to loss_mode"""
-    if loss_mode == 'ctc_def_all':
-        return _loss_ctc_def_all(labels, logits,
-            batch_size=batch_size, seq_length=seq_length, def_val=def_val, pad_val=pad_val)
-    elif loss_mode == 'ctc_def_event':
-        return _loss_ctc_def_event(labels, logits,
-            batch_size=batch_size, seq_length=seq_length, def_val=def_val, pad_val=pad_val)
-    elif loss_mode == 'ctc_ndef_all':
-        return _loss_ctc_ndef_all(labels, logits,
-            batch_size=batch_size, seq_length=seq_length, def_val=def_val, pad_val=pad_val)
-    elif loss_mode == 'naive_def_none':
-        return _loss_naive_def_none(labels, logits,
-            batch_size=batch_size, seq_length=seq_length)
-    elif loss_mode == 'naive_def_event':
-        return _loss_naive_def_event(labels, logits,
-            batch_size=batch_size, seq_length=seq_length, def_val=def_val, pad_val=pad_val)
+    if loss_mode == 'ctc':
+        return _loss_ctc(labels, logits, batch_size=batch_size,
+            seq_length=seq_length, def_val=def_val, pad_val=pad_val,
+            blank_index=blank_index)
+    elif loss_mode == 'naive':
+        return _loss_naive(labels, logits, batch_size=batch_size,
+            seq_length=seq_length)
+    elif loss_mode == 'crossent':
+        return _loss_crossent(labels, logits)
 
 ##### Decoding
 
 @tf.function
-def _greedy_decode(inputs, seq_length, def_index, blank_index, shift=0, def_val=0):
+def _greedy_decode(inputs, seq_length, blank_index, def_val=0):
     """Naive inference by retrieving most likely output at each time-step.
 
     Args:
         inputs: The prediction in form of logits. [batch_size, time_steps, num_classes]
         seq_length: The length of the sequences
-        def_index: The index of the default event which will be set to def_val (or None)
         blank_index: The index of blank which will be set to def_val (or None)
-        shift: How far are events' indices from their values
         def_val: The value associated with the default event
     Returns:
         decoded: The decoded sequence [seq_length]
     """
     # Infer predictions using argmax
     decoded = tf.cast(tf.argmax(inputs, axis=-1), tf.int32)
-    decoded = tf.add(decoded, shift)
-    if def_index is not None:
-        # Set def_index to def_val
-        decoded = tf.where(tf.equal(decoded, def_index-shift),
-            tf.fill([seq_length], def_val), decoded)
     if blank_index is not None:
         # Set epsilon_index to def_val
-        decoded = tf.where(tf.equal(decoded, blank_index-shift),
+        decoded = tf.where(tf.equal(decoded, blank_index),
             tf.fill([seq_length], def_val), decoded)
     return decoded
 
 @tf.function
-def _greedy_decode_and_collapse(inputs, seq_length, def_index, blank_index, shift=0, def_val=0, pad_val=-1, pos='middle'):
+def _greedy_decode_and_collapse(inputs, seq_length, blank_index, def_val, pad_val, pos='middle'):
     """Retrieve most likely output at each time-step and collapse predictions."""
-    decoded = _greedy_decode(inputs, seq_length=seq_length, def_index=def_index,
-        blank_index=blank_index, shift=shift, def_val=def_val)
+    decoded = _greedy_decode(inputs, seq_length=seq_length,
+        blank_index=blank_index, def_val=def_val)
     collapsed, _ = _collapse_sequences(decoded, seq_length, def_val=def_val,
         pad_val=pad_val, mode='replace_collapsed', pos=pos)
     return collapsed, decoded
 
-def _ctc_decode(inputs, seq_length, blank_index, def_val=0, pos='middle'):
+@tf.function
+def _ctc_decode(inputs, seq_length, blank_index, def_val, pad_val, pos='middle'):
     """Perform ctc decoding"""
     batch_size = inputs.get_shape()[0]
     # Decode uses time major
@@ -371,31 +295,25 @@ def _ctc_decode(inputs, seq_length, blank_index, def_val=0, pos='middle'):
     indices, values, shape, indices_u, values_u, shape_u, log_probs = ctc_beam_search_u_decoder(
         inputs=inputs, sequence_length=seq_lengths,
         beam_width=15, blank_index=blank_index, top_paths=1,
-        blank_label=blank_index)
+        blank_label=def_val)
     decoded = tf.sparse.SparseTensor(indices[0], values[0], shape[0])
     decoded = tf.cast(tf.sparse.to_dense(decoded), tf.int32)
     decoded_u = tf.sparse.SparseTensor(indices_u[0], values_u[0], shape_u[0])
     decoded_u = tf.cast(tf.sparse.to_dense(decoded_u), tf.int32)
     # Collapse sequences of events
     decoded_u, _ = _collapse_sequences(decoded_u, seq_length=seq_length,
-        def_val=def_val, pad_val=-1, mode='replace_collapsed', pos=pos)
+        def_val=def_val, pad_val=pad_val, mode='replace_collapsed', pos=pos)
     return decoded_u, decoded
 
-def decode_logits(logits, loss_mode, seq_length, num_event):
+def decode(logits, loss_mode, seq_length, blank_index, def_val, pad_val):
     """Decode ctc logits corresponding to loss_mode"""
 
-    if loss_mode == 'ctc_def_all':
+    if loss_mode == 'ctc':
+        return _ctc_decode(logits, seq_length=seq_length,
+            blank_index=blank_index, def_val=def_val, pad_val=pad_val)
+    elif loss_mode == 'naive':
         return _greedy_decode_and_collapse(logits, seq_length=seq_length,
-            def_index=0, def_val=0, blank_index=num_event+1)
-    elif loss_mode == 'ctc_def_event':
+            blank_index=blank_index, def_val=def_val, pad_val=pad_val)
+    elif loss_mode == 'crossent':
         return _greedy_decode_and_collapse(logits, seq_length=seq_length,
-            def_index=0, def_val=0, blank_index=num_event+1)
-    elif loss_mode == 'ctc_ndef_all':
-        return _ctc_decode(logits, seq_length=seq_length, blank_index=0,
-            def_val=0)
-    elif loss_mode == 'naive_def_none':
-        return _greedy_decode_and_collapse(logits, seq_length=seq_length,
-            def_index=0, def_val=0, blank_index=None)
-    elif loss_mode == 'naive_def_event':
-        return _greedy_decode_and_collapse(logits, seq_length=seq_length,
-            def_index=0, def_val=0, blank_index=None)
+            blank_index=blank_index, def_val=def_val, pad_val=pad_val)
