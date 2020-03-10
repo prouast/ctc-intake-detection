@@ -76,6 +76,8 @@ flags.DEFINE_enum(name='mode',
 flags.DEFINE_enum(name='model',
     default='inert_small_cnn_lstm', enum_values=["lstm", "video_small_cnn_lstm", "inert_small_cnn_lstm", "inert_heydarian_cnn_lstm"],
     help='Select the model: {lstm, video_small_cnn_lstm, inert_small_cnn_lstm, inert_heydarian_cnn_lstm}')
+flags.DEFINE_string(name='model_ckpt',
+    default='run', help='Model checkpoint for prediction (e.g., model_5000).')
 flags.DEFINE_string(name='model_dir',
     default='run', help='Output directory for model and training stats.')
 flags.DEFINE_enum(name='predict_mode',
@@ -362,7 +364,7 @@ def predict():
     elif FLAGS.model == "lstm":
         model = lstm.Model(num_classes, L2_LAMBDA)
     # Load weights
-    model.load_weights(os.path.join(FLAGS.model_dir, "checkpoints/model_7250"))
+    model.load_weights(os.path.join(FLAGS.model_dir, "checkpoints", FLAGS.model_ckpt))
     total_tp = 0; total_fp1 = 0; total_fp2 = 0; total_fp3 = 0; total_fn = 0
     # Files for predicting
     filenames = gfile.Glob(os.path.join(FLAGS.eval_dir, "*.tfrecord"))
