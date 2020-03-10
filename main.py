@@ -433,7 +433,7 @@ def predict():
             pre = tp / (tp + fp1 + fp2 + fp3)
             rec = tp / (tp + fn)
             f1 = 2 * pre * rec / (pre + rec)
-            logging.info("Class {}:".format(i))
+            logging.info("---------------------- Class {} --------------------".format(i))
             logging.info("TP: {0}, FP1: {1}, FP2: {2}, FP3: {3}, FN: {4}".format(
                 tp, fp1, fp2, fp3, fn))
             logging.info("Precision: {}, Recall: {}".format(pre, rec))
