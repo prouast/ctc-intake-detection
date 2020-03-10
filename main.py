@@ -402,7 +402,7 @@ def predict():
                 else:
                     preds = b_preds[0] if i==0 else tf.concat([preds, b_preds[:, -1]], 0)
         # Video level prediction
-        v_seq_length = logits.get_shape()[0]
+        v_seq_length = tf.constant(logits.get_shape()[0], tf.int64)
         if FLAGS.predict_mode == 'video_level':
             # Decode on video level
             preds, _ = decode(tf.expand_dims(logits, 0),
@@ -420,10 +420,11 @@ def predict():
         # Update metrics
         for i in range(1, num_event_classes + 1):
             other_vals = [j for j in range(1, num_event_classes + 1) if j != i]
+            other_vals = tf.constant(other_vals, tf.int32)
             tp, fp1, fp2, fp3, fn = metrics.evaluate_interval_detection(
                 labels=tf.expand_dims(labels, 0), predictions=preds,
-                event_val=i, def_val=DEF_VAL, seq_length=v_seq_length,
-                other_vals=other_vals)
+                event_val=tf.constant(i), def_val=tf.constant(DEF_VAL),
+                seq_length=v_seq_length, other_vals=other_vals)
             fp3 = tf.reduce_sum(fp3)
             cl_metrics["tp_{}".format(i)] += tp
             cl_metrics["fp1_{}".format(i)] += fp1
@@ -490,16 +491,11 @@ def dataset(is_training, is_predicting, data_dir):
     # Shuffle files if needed
     if is_training:
         files = files.shuffle(NUM_TRAINING_FILES)
-    dataset = files.interleave(
-        lambda filename:
-            tf.data.TFRecordDataset(filename)
-            .map(map_func=_get_input_parser(table),
-                num_parallel_calls=AUTOTUNE)
-            .apply(_get_sequence_batch_fn(is_training, is_predicting))
-            #.filter(predicate=_get_def_label_filter(is_training))
-            .map(map_func=_get_transformation_parser(is_training),
-                num_parallel_calls=AUTOTUNE),
-        cycle_length=4)
+    pipeline = lambda filename: (tf.data.TFRecordDataset(filename)
+        .map(map_func=_get_input_parser(table), num_parallel_calls=AUTOTUNE)
+        .apply(_get_sequence_batch_fn(is_training, is_predicting))
+        .map(map_func=_get_transformation_parser(is_training), num_parallel_calls=AUTOTUNE))
+    dataset = files.interleave(pipeline, cycle_length=4)
     if is_training:
         dataset = dataset.shuffle(NUM_SHUFFLE)
     dataset = dataset.batch(FLAGS.batch_size, drop_remainder=True)
@@ -683,18 +679,6 @@ def _get_transformation_parser(is_training):
         return image_transformation_parser
     elif FLAGS.input_mode == "inert":
         return inert_transformation_parser
-
-def _get_def_label_filter(is_training):
-    if is_training:
-        def predicate_fn(features, labels):
-            seq_pool = int(FLAGS.input_fps/FLAGS.seq_fps)
-            labels = _adjust_labels(labels, seq_pool, FLAGS.input_length)
-            return tf.math.greater(tf.reduce_max(labels), 0)
-        return predicate_fn
-    else:
-        def predicate_fn(features, labels):
-            return tf.math.greater_equal(tf.reduce_max(labels), 0)
-        return predicate_fn
 
 def _get_num_classes(label_category):
     return NUM_EVENT_CLASSES_MAP[label_category]

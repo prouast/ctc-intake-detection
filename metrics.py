@@ -110,6 +110,9 @@ def evaluate_interval_detection(labels, predictions, event_val, def_val, seq_len
 
         return seq_masks, max_seq_count
 
+    def_val = tf.cast(def_val, dtype=tf.int32)
+    event_val = tf.cast(event_val, dtype=tf.int32)
+
     # Dimensions
     batch_size = labels.get_shape()[0]
 
