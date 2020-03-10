@@ -16,7 +16,6 @@ import metrics
 import video_small_cnn_lstm
 import inert_small_cnn_lstm
 import inert_heydarian_cnn_lstm
-import lstm
 
 # Raw data
 ORIGINAL_SIZE = 140
@@ -155,7 +154,6 @@ def train_and_evaluate():
         eval_metrics['class_{}_f1'.format(i)] = metrics.F1(
             event_val=i, def_val=DEF_VAL, seq_length=seq_length,
             other_vals=other_vals)
-
     # Set up log writer
     train_writer = tf.summary.create_file_writer(os.path.join(FLAGS.model_dir, "log/train"))
     eval_writer = tf.summary.create_file_writer(os.path.join(FLAGS.model_dir, "log/eval"))
@@ -693,7 +691,7 @@ def _get_hash_table(label_category):
     elif label_category == 'label_2':
         table = tf.lookup.StaticHashTable(
             tf.lookup.KeyValueTensorInitializer(
-                ["Idle", "Eat", "Drink"], [0, 1, 2]), -1)
+                ["Idle", "Intake-Eat", "Intake-Drink"], [0, 1, 2]), -1)
     elif label_category == 'label_3':
         table = tf.lookup.StaticHashTable(
             tf.lookup.KeyValueTensorInitializer(
