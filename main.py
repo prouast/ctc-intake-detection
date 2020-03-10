@@ -10,6 +10,7 @@ from tensorflow.python.platform import gfile
 from tensorflow import keras
 from ctc import decode
 from ctc import loss
+from ctc import collapse
 from model_saver import ModelSaver
 import metrics
 import video_small_cnn_lstm
@@ -33,9 +34,9 @@ PAD_VAL = -1
 
 # Hyperparameters
 L2_LAMBDA = 1e-3
-LR_BOUNDARIES = [15, 30, 45]
+LR_BOUNDARIES = [5, 10, 15]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
-LR_DECAY_RATE = 0.75
+LR_DECAY_RATE = 0.85
 LR_DECAY_STEPS = 1
 NUM_SHUFFLE = 50000
 AUTOTUNE = tf.data.experimental.AUTOTUNE
@@ -46,7 +47,7 @@ flags.DEFINE_integer(name='batch_size',
 flags.DEFINE_string(name='eval_dir',
     default='data/inert/eval', help='Directory for val data.')
 flags.DEFINE_integer(name='eval_steps',
-    default=500, help='Eval and save best model after every x steps.')
+    default=250, help='Eval and save best model after every x steps.')
 flags.DEFINE_integer(name='input_length',
     default=128, help='Number of input sequence elements.')
 flags.DEFINE_enum(name='input_mode',
@@ -77,6 +78,9 @@ flags.DEFINE_enum(name='model',
     help='Select the model: {lstm, video_small_cnn_lstm, inert_small_cnn_lstm, inert_heydarian_cnn_lstm}')
 flags.DEFINE_string(name='model_dir',
     default='run', help='Output directory for model and training stats.')
+flags.DEFINE_enum(name='predict_mode',
+    default='batch_level_voted', enum_values=['video_level', 'batch_level', 'batch_level_voted'],
+    help='How should the predictions be aggregated?')
 flags.DEFINE_integer(name='seq_fps',
     default=8, help='Target frames per seconds in sequence generation.')
 flags.DEFINE_string(name='train_dir',
@@ -85,12 +89,6 @@ flags.DEFINE_integer(name='train_epochs',
     default=200, help='Number of training epochs.')
 
 logging.set_verbosity(logging.INFO)
-
-def main(arg=None):
-    if FLAGS.mode == 'train_and_evaluate':
-        train_and_evaluate()
-    elif FLAGS.mode == 'predict':
-        predict()
 
 def train_and_evaluate():
     """Run the experiment."""
@@ -196,7 +194,9 @@ def train_and_evaluate():
             # Decode logits into predictions
             train_predictions_u, train_predictions = decode(train_logits,
                 loss_mode=FLAGS.loss_mode, seq_length=seq_length,
-                blank_index=BLANK_INDEX, def_val=DEF_VAL, pad_val=PAD_VAL)
+                blank_index=BLANK_INDEX, def_val=DEF_VAL)
+            train_predictions_u = collapse(train_predictions_u,
+                seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL)
 
             # Log every FLAGS.log_steps steps.
             if global_step % FLAGS.log_steps == 0:
@@ -275,8 +275,9 @@ def train_and_evaluate():
                     # Decode logits into predictions
                     eval_predictions_u, eval_predictions = decode(eval_logits,
                         loss_mode=FLAGS.loss_mode, seq_length=seq_length,
-                        blank_index=BLANK_INDEX, def_val=DEF_VAL,
-                        pad_val=PAD_VAL)
+                        blank_index=BLANK_INDEX, def_val=DEF_VAL)
+                    eval_predictions_u = collapse(eval_predictions_u,
+                        seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL)
 
                     # Update metric
                     for i in range(1, num_event_classes + 1):
@@ -345,50 +346,11 @@ def train_and_evaluate():
         logging.info('Finished epoch %s' % (epoch,))
         optimizer.finish_epoch()
 
-class Adam(keras.optimizers.Adam):
-    """Adam optimizer that retrieves learning rate based on epochs"""
-    def __init__(self, **kwargs):
-        super(Adam, self).__init__(**kwargs)
-        self._epochs = None
-    def _decayed_lr(self, var_dtype):
-        """Get learning rate based on epochs."""
-        lr_t = self._get_hyper("learning_rate", var_dtype)
-        if isinstance(lr_t, keras.optimizers.schedules.LearningRateSchedule):
-            epochs = tf.cast(self.epochs, var_dtype)
-            lr_t = tf.cast(lr_t(epochs), var_dtype)
-        return lr_t
-    @property
-    def epochs(self):
-        """Variable. The number of epochs."""
-        if self._epochs is None:
-            self._epochs = self.add_weight(
-                "epochs", shape=[], dtype=tf.int64, trainable=False,
-                aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA)
-            self._weights.append(self._epochs)
-        return self._epochs
-    def finish_epoch(self):
-        """Increment epoch count"""
-        return self._epochs.assign_add(1)
-
-def _adjust_labels(labels, seq_pool, seq_length, batch_size=None):
-    """If seq_pool performed, adjust seq_length and labels by slicing"""
-    if batch_size is not None:
-        if seq_pool > 1:
-            labels = tf.strided_slice(
-                input_=labels, begin=[0, seq_pool-1], end=[batch_size, seq_length],
-                strides=[1, seq_pool])
-        labels = tf.reshape(labels, [batch_size, int(seq_length/seq_pool)])
-    else:
-        if seq_pool > 1:
-            labels = tf.strided_slice(
-                input_=labels, begin=[seq_pool-1], end=[seq_length],
-                strides=[seq_pool])
-        labels = tf.reshape(labels, [int(seq_length/seq_pool)])
-    return labels
-
 def predict():
+    assert FLAGS.batch_size == 1, "batch_size should be 1 for prediction"
     # Get the model
     seq_pool = int(FLAGS.input_fps/FLAGS.seq_fps)
+    seq_length = int(FLAGS.input_length / seq_pool)
     num_event_classes = _get_num_classes(FLAGS.label_mode)
     num_classes = num_event_classes + 1
     if FLAGS.model == "video_small_cnn_lstm":
@@ -400,7 +362,7 @@ def predict():
     elif FLAGS.model == "lstm":
         model = lstm.Model(num_classes, L2_LAMBDA)
     # Load weights
-    model.load_weights(os.path.join(FLAGS.model_dir, "checkpoints/model_1500"))
+    model.load_weights(os.path.join(FLAGS.model_dir, "checkpoints/model_7250"))
     total_tp = 0; total_fp1 = 0; total_fp2 = 0; total_fp3 = 0; total_fn = 0
     # Files for predicting
     filenames = gfile.Glob(os.path.join(FLAGS.eval_dir, "*.tfrecord"))
@@ -418,17 +380,47 @@ def predict():
             b_logits = model(b_features, training=False)
             # Collect results
             if i == 0:
-                labels = b_labels[:, -1]
-                logits = b_logits[:, -1]
+                labels = b_labels[0]
+                logits = b_logits[0]
             else:
                 labels = tf.concat([labels, b_labels[:, -1]], 0)
-                logits = tf.concat([logits, b_logits[:, -1]], 0)
-        # Predict on video level
+                logits = tf.concat([logits, b_logits[:, -1, :]], 0)
+            # Collect
+            if 'batch_level' in FLAGS.predict_mode:
+                # Decode on batch level
+                b_preds, _ = decode(b_logits,
+                    loss_mode=FLAGS.loss_mode, seq_length=seq_length,
+                    blank_index=BLANK_INDEX, def_val=DEF_VAL)
+                if FLAGS.predict_mode == 'batch_level_voted':
+                    # Construct preds tensor
+                    if i == 0:
+                        preds = tf.zeros([seq_length, num_classes], tf.int32)
+                    else:
+                        preds = tf.concat([preds, tf.zeros([1, num_classes], tf.int32)], 0)
+                    # Add votes
+                    preds_incr = tf.concat([
+                        tf.zeros([i, num_classes], tf.int32),
+                        tf.one_hot(b_preds[0], depth=num_classes, dtype=tf.int32)], 0)
+                    preds += preds_incr
+                else:
+                    preds = b_preds[0] if i==0 else tf.concat([preds, b_preds[:, -1]], 0)
+
         v_seq_length = logits.get_shape()[0]
-        preds, _ = decode(tf.expand_dims(logits, 0),
-            loss_mode=FLAGS.loss_mode, seq_length=v_seq_length,
-            blank_index=BLANK_INDEX, def_val=DEF_VAL, pad_val=PAD_VAL)
-        # Instantiate the metrics
+        if FLAGS.predict_mode == 'video_level':
+            # Decode on video level
+            preds, _ = decode(tf.expand_dims(logits, 0),
+                loss_mode=FLAGS.loss_mode, seq_length=v_seq_length,
+                blank_index=BLANK_INDEX, def_val=DEF_VAL)
+        elif FLAGS.predict_mode == 'batch_level':
+            preds = tf.expand_dims(preds, 0)
+        elif FLAGS.predict_mode == 'batch_level_voted':
+            # Evaluate votes
+            preds = tf.argmax(preds, 1, tf.int32)
+            preds = tf.expand_dims(preds, 0)
+        # Collapse on video level
+        preds = collapse(preds, seq_length=v_seq_length, def_val=DEF_VAL,
+            pad_val=PAD_VAL)
+
         part_tp = 0; part_fp1 = 0; part_fp2 = 0; part_fp3 = 0; part_fn = 0
         # Update metrics
         for i in range(1, num_event_classes + 1):
@@ -506,6 +498,47 @@ def dataset(is_training, is_predicting, data_dir):
     dataset = dataset.prefetch(buffer_size=AUTOTUNE)
 
     return dataset
+
+class Adam(keras.optimizers.Adam):
+    """Adam optimizer that retrieves learning rate based on epochs"""
+    def __init__(self, **kwargs):
+        super(Adam, self).__init__(**kwargs)
+        self._epochs = None
+    def _decayed_lr(self, var_dtype):
+        """Get learning rate based on epochs."""
+        lr_t = self._get_hyper("learning_rate", var_dtype)
+        if isinstance(lr_t, keras.optimizers.schedules.LearningRateSchedule):
+            epochs = tf.cast(self.epochs, var_dtype)
+            lr_t = tf.cast(lr_t(epochs), var_dtype)
+        return lr_t
+    @property
+    def epochs(self):
+        """Variable. The number of epochs."""
+        if self._epochs is None:
+            self._epochs = self.add_weight(
+                "epochs", shape=[], dtype=tf.int64, trainable=False,
+                aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA)
+            self._weights.append(self._epochs)
+        return self._epochs
+    def finish_epoch(self):
+        """Increment epoch count"""
+        return self._epochs.assign_add(1)
+
+def _adjust_labels(labels, seq_pool, seq_length, batch_size=None):
+    """If seq_pool performed, adjust seq_length and labels by slicing"""
+    if batch_size is not None:
+        if seq_pool > 1:
+            labels = tf.strided_slice(
+                input_=labels, begin=[0, seq_pool-1], end=[batch_size, seq_length],
+                strides=[1, seq_pool])
+        labels = tf.reshape(labels, [batch_size, int(seq_length/seq_pool)])
+    else:
+        if seq_pool > 1:
+            labels = tf.strided_slice(
+                input_=labels, begin=[seq_pool-1], end=[seq_length],
+                strides=[seq_pool])
+        labels = tf.reshape(labels, [int(seq_length/seq_pool)])
+    return labels
 
 def _get_input_parser(table):
     """Return the input parser"""
@@ -676,6 +709,12 @@ def _get_hash_table(label_category):
             tf.lookup.KeyValueTensorInitializer(
                 ["Idle", "Hand", "Fork", "Spoon", "Knife", "Finger", "Cup"], [0, 1, 2, 3, 4, 5, 6]), -1)
     return table
+
+def main(arg=None):
+    if FLAGS.mode == 'train_and_evaluate':
+        train_and_evaluate()
+    elif FLAGS.mode == 'predict':
+        predict()
 
 # Run
 if __name__ == "__main__":

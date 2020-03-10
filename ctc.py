@@ -257,7 +257,7 @@ def loss(labels, logits, loss_mode, batch_size, seq_length, def_val, pad_val, bl
 ##### Decoding
 
 @tf.function
-def _greedy_decode(inputs, seq_length, blank_index, def_val=0):
+def _greedy_decode(inputs, seq_length, blank_index, def_val):
     """Naive inference by retrieving most likely output at each time-step.
 
     Args:
@@ -276,17 +276,7 @@ def _greedy_decode(inputs, seq_length, blank_index, def_val=0):
             tf.fill([seq_length], def_val), decoded)
     return decoded
 
-@tf.function
-def _greedy_decode_and_collapse(inputs, seq_length, blank_index, def_val, pad_val, pos='middle'):
-    """Retrieve most likely output at each time-step and collapse predictions."""
-    decoded = _greedy_decode(inputs, seq_length=seq_length,
-        blank_index=blank_index, def_val=def_val)
-    collapsed, _ = _collapse_sequences(decoded, seq_length, def_val=def_val,
-        pad_val=pad_val, mode='replace_collapsed', pos=pos)
-    return collapsed, decoded
-
-@tf.function
-def _ctc_decode(inputs, seq_length, blank_index, def_val, pad_val, pos='middle'):
+def _ctc_decode(inputs, seq_length, blank_index, def_val):
     """Perform ctc decoding"""
     batch_size = inputs.get_shape()[0]
     # Decode uses time major
@@ -300,20 +290,22 @@ def _ctc_decode(inputs, seq_length, blank_index, def_val, pad_val, pos='middle')
     decoded = tf.cast(tf.sparse.to_dense(decoded), tf.int32)
     decoded_u = tf.sparse.SparseTensor(indices_u[0], values_u[0], shape_u[0])
     decoded_u = tf.cast(tf.sparse.to_dense(decoded_u), tf.int32)
-    # Collapse sequences of events
-    decoded_u, _ = _collapse_sequences(decoded_u, seq_length=seq_length,
-        def_val=def_val, pad_val=pad_val, mode='replace_collapsed', pos=pos)
     return decoded_u, decoded
 
-def decode(logits, loss_mode, seq_length, blank_index, def_val, pad_val):
+def decode(logits, loss_mode, seq_length, blank_index, def_val):
     """Decode ctc logits corresponding to loss_mode"""
 
     if loss_mode == 'ctc':
         return _ctc_decode(logits, seq_length=seq_length,
-            blank_index=blank_index, def_val=def_val, pad_val=pad_val)
+            blank_index=blank_index, def_val=def_val)
     elif loss_mode == 'naive':
-        return _greedy_decode_and_collapse(logits, seq_length=seq_length,
-            blank_index=blank_index, def_val=def_val, pad_val=pad_val)
+        return _greedy_decode(logits, seq_length=seq_length,
+            blank_index=blank_index, def_val=def_val)
     elif loss_mode == 'crossent':
-        return _greedy_decode_and_collapse(logits, seq_length=seq_length,
-            blank_index=blank_index, def_val=def_val, pad_val=pad_val)
+        return _greedy_decode(logits, seq_length=seq_length,
+            blank_index=blank_index, def_val=def_val)
+
+def collapse(decoded, seq_length, def_val, pad_val, pos='moddle'):
+    collapsed, _ = _collapse_sequences(decoded, seq_length, def_val=def_val,
+        pad_val=pad_val, mode='replace_collapsed', pos=pos)
+    return collapsed
