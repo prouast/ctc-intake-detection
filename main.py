@@ -359,6 +359,12 @@ def predict():
         model = inert_heydarian_cnn_lstm.Model(num_classes, L2_LAMBDA)
     # Load weights
     model.load_weights(os.path.join(FLAGS.model_dir, "checkpoints", FLAGS.model_ckpt))
+    # Set up metrics
+    class_tp = {}; class_fp1 = {}; class_fp2 = {}; class_fp3 = {}; class_fn = {}
+    for i in range(1, num_event_classes + 1):
+        class_tp["{}".format(i)] = 0; class_fp1["{}".format(i)] = 0
+        class_fp2["{}".format(i)] = 0; class_fp3["{}".format(i)] = 0
+        class_fn["{}".format(i)] = 0
     total_tp = 0; total_fp1 = 0; total_fp2 = 0; total_fp3 = 0; total_fn = 0
     # Files for predicting
     filenames = gfile.Glob(os.path.join(FLAGS.eval_dir, "*.tfrecord"))
@@ -422,12 +428,14 @@ def predict():
                 event_val=i, def_val=DEF_VAL, seq_length=v_seq_length,
                 other_vals=other_vals)
             fp3 = tf.reduce_sum(fp3)
+            class_tp["{}".format(i)] += tp; class_fp1["{}".format(i)] += fp1
+            class_fp2["{}".format(i)] += fp2; class_fp3["{}".format(i)] += fp3
+            class_fn["{}".format(i)] += fn
             part_tp += tp; part_fp1 += fp1; part_fp2 += fp2
             part_fp3 += fp3; part_fn += fn
         pre = part_tp / (part_tp + part_fp1 + part_fp2 + part_fp3)
         rec = part_tp / (part_tp + part_fn)
         f1 = 2 * pre * rec / (pre + rec)
-        # TODO fp3 does not seem to work
         logging.info("TP: {0}, FP1: {1}, FP2: {2}, FP3: {3}, FN: {4}".format(
             part_tp.numpy(), part_fp1.numpy(), part_fp2.numpy(), part_fp3.numpy(), part_fn.numpy()))
         logging.info("Precision: {}, Recall: {}".format(
@@ -447,6 +455,20 @@ def predict():
 
     # Print metrics
     logging.info("Finished")
+    m_pre = 0; m_rec = 0; m_f1 = 0;
+    for i in range(1, num_event_classes + 1):
+        logging.info("Class {}:".format(i))
+        cl_tp = class_tp["{}".format(i)]; cl_fp1 = class_fp1["{}".format(i)]
+        cl_fp2 = class_fp2["{}".format(i)]; cl_fp3 = class_fp3["{}".format(i)]
+        cl_fn = class_fn["{}".format(i)]
+        cl_pre = cl_tp / (cl_tp + cl_fp1 + cl_fp2 + cl_fp3)
+        cl_rec = cl_tp / (cl_tp + cl_fn)
+        cl_f1 = 2 * cl_pre * cl_rec / (cl_pre + cl_rec)
+        logging.info("TP: {0}, FP1: {1}, FP2: {2}, FP3: {3}, FN: {4}".format(
+            cl_tp, cl_fp1, cl_fp2, cl_fp3, cl_fn))
+        logging.info("Precision: {0}, Recall: {1}".format(cl_pre, cl_rec))
+        logging.info("F1: {0}".format(cl_f1))
+        m_pre += cl_pre; m_rec += cl_rec; m_f1 += cl_f1
     pre = total_tp / (total_tp + total_fp1 + total_fp2 + total_fp3)
     rec = total_tp / (total_tp + total_fn)
     f1 = 2 * pre * rec / (pre + rec)
@@ -454,6 +476,9 @@ def predict():
         total_tp, total_fp1, total_fp2, total_fp3, total_fn))
     logging.info("Precision: {0}, Recall: {1}".format(pre, rec))
     logging.info("F1: {0}".format(f1))
+    logging.info("mPrecision: {0}, mRecall: {1}".format(
+        m_pre/num_event_classes, m_rec/num_event_classes))
+    logging.info("mF1: {0}".format(m_f1/num_event_classes))
 
 def dataset(is_training, is_predicting, data_dir):
     """Input pipeline"""
