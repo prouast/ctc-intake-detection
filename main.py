@@ -53,8 +53,6 @@ flags.DEFINE_integer(name='input_length',
 flags.DEFINE_enum(name='input_mode',
     default="inert", enum_values=["video", "inert"],
     help='What is the input mode')
-flags.DEFINE_integer(name='input_features',
-    default=2048, help='Number of input features in fc7 mode.')
 flags.DEFINE_integer(name='input_fps',
     default=64, help='Frames per seconds in input data.')
 flags.DEFINE_enum(name='label_mode',
@@ -361,8 +359,6 @@ def predict():
         model = inert_small_cnn_lstm.Model(num_classes, L2_LAMBDA)
     elif FLAGS.model == "inert_heydarian_cnn_lstm":
         model = inert_heydarian_cnn_lstm.Model(num_classes, L2_LAMBDA)
-    elif FLAGS.model == "lstm":
-        model = lstm.Model(num_classes, L2_LAMBDA)
     # Load weights
     model.load_weights(os.path.join(FLAGS.model_dir, "checkpoints", FLAGS.model_ckpt))
     total_tp = 0; total_fp1 = 0; total_fp2 = 0; total_fp3 = 0; total_fn = 0
