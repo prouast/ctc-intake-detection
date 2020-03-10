@@ -72,8 +72,8 @@ flags.DEFINE_enum(name='mode',
     default="train_and_evaluate", enum_values=["train_and_evaluate", "predict"],
     help='What mode should tensorflow be started in')
 flags.DEFINE_enum(name='model',
-    default='inert_small_cnn_lstm', enum_values=["lstm", "video_small_cnn_lstm", "inert_small_cnn_lstm", "inert_heydarian_cnn_lstm"],
-    help='Select the model: {lstm, video_small_cnn_lstm, inert_small_cnn_lstm, inert_heydarian_cnn_lstm}')
+    default='inert_small_cnn_lstm', enum_values=["video_small_cnn_lstm", "inert_small_cnn_lstm", "inert_heydarian_cnn_lstm"],
+    help='Select the model: {video_small_cnn_lstm, inert_small_cnn_lstm, inert_heydarian_cnn_lstm}')
 flags.DEFINE_string(name='model_ckpt',
     default='run', help='Model checkpoint for prediction (e.g., model_5000).')
 flags.DEFINE_string(name='model_dir',
@@ -376,14 +376,10 @@ def predict():
                 FLAGS.input_length, FLAGS.batch_size)
             # Run the forward pass
             b_logits = model(b_features, training=False)
-            # Collect results
-            if i == 0:
-                labels = b_labels[0]
-                logits = b_logits[0]
-            else:
-                labels = tf.concat([labels, b_labels[:, -1]], 0)
-                logits = tf.concat([logits, b_logits[:, -1, :]], 0)
-            # Collect
+            # Collect labels and logits
+            labels = b_labels[0] if i==0 else tf.concat([labels, b_labels[:, -1]], 0)
+            logits = b_logits[0] if i==0 else tf.concat([logits, b_logits[:, -1]], 0)
+            # Collect predictions
             if 'batch_level' in FLAGS.predict_mode:
                 # Decode on batch level
                 b_preds, _ = decode(b_logits,
@@ -402,7 +398,7 @@ def predict():
                     preds += preds_incr
                 else:
                     preds = b_preds[0] if i==0 else tf.concat([preds, b_preds[:, -1]], 0)
-
+        # Video level prediction
         v_seq_length = logits.get_shape()[0]
         if FLAGS.predict_mode == 'video_level':
             # Decode on video level
@@ -419,8 +415,8 @@ def predict():
         preds = collapse(preds, seq_length=v_seq_length, def_val=DEF_VAL,
             pad_val=PAD_VAL)
 
-        part_tp = 0; part_fp1 = 0; part_fp2 = 0; part_fp3 = 0; part_fn = 0
         # Update metrics
+        part_tp = 0; part_fp1 = 0; part_fp2 = 0; part_fp3 = 0; part_fn = 0
         for i in range(1, num_event_classes + 1):
             other_vals = [j for j in range(1, num_event_classes + 1) if j != i]
             tp, fp1, fp2, fp3, fn = metrics.evaluate_interval_detection(
