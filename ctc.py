@@ -4,9 +4,7 @@ import tensorflow as tf
 import tensorflow_addons as tfa
 import collections
 from absl import logging
-from tensorflow_ctc_beam_search_u_decoder import ctc_beam_search_u_decoder
-
-NEG_INF = -float("inf")
+from tensorflow_ctc_ext_beam_search_decoder import ctc_ext_beam_search_decoder
 
 def _collapse_sequences(labels, seq_length, def_val, pad_val, mode, pos):
     """Collapse sequences of labels, optionally replacing with default value
@@ -282,7 +280,7 @@ def _ctc_decode(inputs, seq_length, blank_index, def_val):
     # Decode uses time major
     inputs = tf.transpose(a=inputs, perm=[1, 0, 2])
     seq_lengths = tf.fill([batch_size], seq_length)
-    indices, values, shape, indices_u, values_u, shape_u, log_probs = ctc_beam_search_u_decoder(
+    indices, values, shape, indices_u, values_u, shape_u, log_probs = ctc_ext_beam_search_decoder(
         inputs=inputs, sequence_length=seq_lengths,
         beam_width=15, blank_index=blank_index, top_paths=1,
         blank_label=def_val)
