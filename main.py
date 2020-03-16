@@ -1,4 +1,3 @@
-import math
 import os
 import numpy as np
 from absl import app

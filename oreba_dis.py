@@ -1,5 +1,6 @@
 """Pipeline for the OREBA dataset"""
 
+import math
 import os
 import tensorflow as tf
 import tensorflow_addons as tfa
@@ -115,7 +116,7 @@ class OREBA():
                 limit = [1, diff, diff, 1]
                 offset = tf.random.uniform(shape=tf.shape(limit),
                     dtype=tf.int32, maxval=tf.int32.max) % limit
-                size = [FLAGS.input_length, FRAME_SIZE, FRAME_SIZE, NUM_CHANNELS]
+                size = [self.input_length, FRAME_SIZE, FRAME_SIZE, NUM_CHANNELS]
                 image_data = tf.slice(image_data, offset, size)
 
                 # Random horizontal flip
