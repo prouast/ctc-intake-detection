@@ -16,7 +16,7 @@ import video_small_cnn_lstm
 import video_resnet_cnn_lstm
 import inert_small_cnn_lstm
 import inert_heydarian_cnn_lstm
-import oreba
+import oreba_dis
 
 # Representation
 BLANK_INDEX = 0
@@ -31,7 +31,7 @@ LR_DECAY_RATE = 0.85
 LR_DECAY_STEPS = 1
 NUM_SHUFFLE = 1000
 
-LABEL_MODES = oreba.NUM_EVENT_CLASSES_MAP.keys()
+LABEL_MODES = oreba_dis.NUM_EVENT_CLASSES_MAP.keys()
 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer(name='batch_size',
@@ -90,7 +90,7 @@ def train_and_evaluate():
 
     # Get dataset
     if FLAGS.dataset == 'oreba-dis':
-        dataset = oreba.OREBA(FLAGS.label_mode, FLAGS.input_mode,
+        dataset = oreba_dis.OREBA(FLAGS.label_mode, FLAGS.input_mode,
             FLAGS.input_length, FLAGS.input_fps, FLAGS.seq_fps)
     else:
         raise ValueError("Dataset {} not implemented!".format(FLAGS.dataset))
@@ -356,7 +356,7 @@ def predict():
     assert FLAGS.batch_size == 1, "batch_size should be 1 for prediction"
     # Get dataset
     if FLAGS.dataset == 'oreba-dis':
-        dataset = oreba.OREBA(FLAGS.label_mode, FLAGS.input_mode,
+        dataset = oreba_dis.OREBA(FLAGS.label_mode, FLAGS.input_mode,
             FLAGS.input_length, FLAGS.input_fps, FLAGS.seq_fps)
     else:
         raise ValueError("Dataset {} not implemented!".format(FLAGS.dataset))

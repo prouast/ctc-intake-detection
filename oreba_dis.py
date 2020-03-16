@@ -1,11 +1,5 @@
 """Pipeline for the OREBA dataset"""
 
-# Mode (video / inertial)
-# label_mode
-# input fps
-# inpiut length
-# seq fps
-
 import os
 import tensorflow as tf
 import tensorflow_addons as tfa
@@ -21,6 +15,7 @@ NUM_EVENT_CLASSES_MAP = {"label_1": 1, "label_2": 2, "label_3": 3, "label_4": 6}
 FLIP_ACC = [1., -1., 1.]
 FLIP_GYRO = [-1., 1., -1.]
 
+logging.set_verbosity(logging.INFO)
 
 class OREBA():
 
