@@ -5,7 +5,6 @@ from absl import app
 from absl import flags
 from absl import logging
 import tensorflow as tf
-import tensorflow_addons as tfa
 from tensorflow.python.platform import gfile
 from tensorflow import keras
 from ctc import decode
@@ -17,15 +16,7 @@ import video_small_cnn_lstm
 import video_resnet_cnn_lstm
 import inert_small_cnn_lstm
 import inert_heydarian_cnn_lstm
-
-# Raw data
-ORIGINAL_SIZE = 140
-FRAME_SIZE = 128
-NUM_CHANNELS = 3
-NUM_EVENT_CLASSES_MAP = {"label_1": 1, "label_2": 2, "label_3": 3, "label_4": 6}
-NUM_TRAINING_FILES = 62
-FLIP_ACC = [1., -1., 1.]
-FLIP_GYRO = [-1., 1., -1.]
+import oreba
 
 # Representation
 BLANK_INDEX = 0
@@ -39,11 +30,15 @@ LR_VALUE_DIV = [1., 10., 100., 1000.]
 LR_DECAY_RATE = 0.85
 LR_DECAY_STEPS = 1
 NUM_SHUFFLE = 1000
-AUTOTUNE = tf.data.experimental.AUTOTUNE
+
+LABEL_MODES = oreba.NUM_EVENT_CLASSES_MAP.keys()
 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer(name='batch_size',
     default=128, help='Batch size used for training.')
+flags.DEFINE_enum(name='dataset',
+    default='oreba-dis', enum_values=["oreba-dis", "fic", "clemson"],
+    help='Select the dataset')
 flags.DEFINE_string(name='eval_dir',
     default='data/inert/eval', help='Directory for val data.')
 flags.DEFINE_integer(name='eval_steps',
@@ -56,7 +51,7 @@ flags.DEFINE_enum(name='input_mode',
 flags.DEFINE_integer(name='input_fps',
     default=64, help='Frames per seconds in input data.')
 flags.DEFINE_enum(name='label_mode',
-    default="label_1", enum_values=NUM_EVENT_CLASSES_MAP.keys(),
+    default="label_1", enum_values=LABEL_MODES,
     help='What is the label mode')
 flags.DEFINE_integer(name='log_steps',
     default=100, help='Log after every x steps.')
@@ -93,10 +88,18 @@ logging.set_verbosity(logging.INFO)
 def train_and_evaluate():
     """Run the experiment."""
 
+    # Get dataset
+    if FLAGS.dataset == 'oreba-dis':
+        dataset = oreba.OREBA(FLAGS.label_mode, FLAGS.input_mode,
+            FLAGS.input_length, FLAGS.input_fps, FLAGS.seq_fps)
+    else:
+        raise ValueError("Dataset {} not implemented!".format(FLAGS.dataset))
+
     # Read the representation choice
     seq_pool = int(FLAGS.input_fps/FLAGS.seq_fps)
-    num_event_classes = _get_num_classes(FLAGS.label_mode)
+    num_event_classes = dataset.num_classes()
     num_classes = num_event_classes + 1
+
     # Read the model choice
     if FLAGS.model == "video_small_cnn_lstm":
         model = video_small_cnn_lstm.Model(num_classes, L2_LAMBDA)
@@ -106,8 +109,8 @@ def train_and_evaluate():
         model = inert_small_cnn_lstm.Model(num_classes, L2_LAMBDA)
     elif FLAGS.model == "inert_heydarian_cnn_lstm":
         model = inert_heydarian_cnn_lstm.Model(num_classes, L2_LAMBDA)
-    elif FLAGS.model == "lstm":
-        model = lstm.Model(num_classes, L2_LAMBDA)
+    else:
+        raise ValueError("Model {} not implemented!".format(FLAGS.model))
 
     # Instantiate learning rate schedule and optimizer
     if FLAGS.lr_decay_fn == "exponential":
@@ -121,8 +124,10 @@ def train_and_evaluate():
     optimizer = Adam(learning_rate=lr_schedule)
 
     # Get train and eval dataset
-    train_dataset = dataset(is_training=True, is_predicting=False, data_dir=FLAGS.train_dir)
-    eval_dataset = dataset(is_training=False, is_predicting=False, data_dir=FLAGS.eval_dir)
+    train_dataset = dataset(batch_size=FLAGS.batch_size, is_training=True,
+        is_predicting=False, data_dir=FLAGS.train_dir, num_shuffle=NUM_SHUFFLE)
+    eval_dataset = dataset(batch_size=FLAGS.batch_size, is_training=False,
+        is_predicting=False, data_dir=FLAGS.eval_dir, num_shuffle=NUM_SHUFFLE)
 
     # Instantiate the metrics
     seq_length = int(FLAGS.input_length / seq_pool)
@@ -349,10 +354,16 @@ def train_and_evaluate():
 
 def predict():
     assert FLAGS.batch_size == 1, "batch_size should be 1 for prediction"
+    # Get dataset
+    if FLAGS.dataset == 'oreba-dis':
+        dataset = oreba.OREBA(FLAGS.label_mode, FLAGS.input_mode,
+            FLAGS.input_length, FLAGS.input_fps, FLAGS.seq_fps)
+    else:
+        raise ValueError("Dataset {} not implemented!".format(FLAGS.dataset))
     # Get the model
     seq_pool = int(FLAGS.input_fps/FLAGS.seq_fps)
     seq_length = int(FLAGS.input_length / seq_pool)
-    num_event_classes = _get_num_classes(FLAGS.label_mode)
+    num_event_classes = dataset.num_classes()
     num_classes = num_event_classes + 1
     if FLAGS.model == "video_small_cnn_lstm":
         model = video_small_cnn_lstm.Model(FLAGS.input_length, num_classes, L2_LAMBDA)
@@ -360,6 +371,8 @@ def predict():
         model = inert_small_cnn_lstm.Model(num_classes, L2_LAMBDA)
     elif FLAGS.model == "inert_heydarian_cnn_lstm":
         model = inert_heydarian_cnn_lstm.Model(num_classes, L2_LAMBDA)
+    else:
+        raise ValueError("Model {} not implemented!".format(FLAGS.model))
     # Load weights
     model.load_weights(os.path.join(FLAGS.model_dir, "checkpoints", FLAGS.model_ckpt))
     # Set up metrics
@@ -374,7 +387,8 @@ def predict():
     for filename in filenames:
         logging.info("Working on {0}.".format(filename))
         # Get the dataset
-        data = dataset(is_training=False, is_predicting=True, data_dir=filename)
+        data = dataset(batch_size=FLAGS.batch_size, is_training=False,
+            is_predicting=True, data_dir=filename)
         # Iterate through batches
         for i, (b_features, b_labels) in enumerate(data):
             # Adjust labels
@@ -475,37 +489,6 @@ def predict():
         m_pre/num_event_classes, m_rec/num_event_classes))
     logging.info("mF1: {0}".format(m_f1/num_event_classes))
 
-def dataset(is_training, is_predicting, data_dir):
-    """Input pipeline"""
-    # Scan for training files
-    if is_predicting:
-        filenames = [data_dir]
-    else:
-        filenames = gfile.Glob(os.path.join(data_dir, "*.tfrecord"))
-    if not filenames:
-        raise RuntimeError('No files found.')
-    logging.info("Found {0} files.".format(str(len(filenames))))
-    # List files
-    files = tf.data.Dataset.list_files(filenames)
-    # Lookup table for Labels
-    table = None
-    if FLAGS.input_mode == 'inert':
-        table = _get_hash_table(FLAGS.label_mode)
-    # Shuffle files if needed
-    if is_training:
-        files = files.shuffle(NUM_TRAINING_FILES)
-    pipeline = lambda filename: (tf.data.TFRecordDataset(filename)
-        .map(map_func=_get_input_parser(table), num_parallel_calls=AUTOTUNE)
-        .apply(_get_sequence_batch_fn(is_training, is_predicting))
-        .map(map_func=_get_transformation_parser(is_training), num_parallel_calls=AUTOTUNE))
-    dataset = files.interleave(pipeline, cycle_length=4)
-    if is_training:
-        dataset = dataset.shuffle(NUM_SHUFFLE)
-    dataset = dataset.batch(FLAGS.batch_size, drop_remainder=True)
-    dataset = dataset.prefetch(buffer_size=AUTOTUNE)
-
-    return dataset
-
 class Adam(keras.optimizers.Adam):
     """Adam optimizer that retrieves learning rate based on epochs"""
     def __init__(self, **kwargs):
@@ -546,164 +529,6 @@ def _adjust_labels(labels, seq_pool, seq_length, batch_size=None):
                 strides=[seq_pool])
         labels = tf.reshape(labels, [int(seq_length/seq_pool)])
     return labels
-
-def _get_input_parser(table):
-    """Return the input parser"""
-
-    def input_parser_video(serialized_example):
-        """Parser for raw video"""
-        features = tf.io.parse_single_example(
-            serialized_example, {
-                'example/{}'.format(FLAGS.label_mode): tf.io.FixedLenFeature([], dtype=tf.int64),
-                'example/image': tf.io.FixedLenFeature([], dtype=tf.string)
-        })
-        label = tf.cast(features['example/{}'.format(FLAGS.label_mode)], tf.int32)
-        image_data = tf.io.decode_raw(features['example/image'], tf.uint8)
-        image_data = tf.cast(image_data, tf.float32)
-        image_data = tf.reshape(image_data,
-            [ORIGINAL_SIZE, ORIGINAL_SIZE, NUM_CHANNELS])
-        image_data = tf.divide(image_data, 255) # Convert to [0, 1] range
-        return image_data, label
-
-    def input_parser_inert(serialized_example):
-        """Parser for inertial data"""
-        features = tf.io.parse_single_example(
-            serialized_example, {
-                'example/{}'.format(FLAGS.label_mode): tf.io.FixedLenFeature([], dtype=tf.string),
-                'example/dom_acc': tf.io.FixedLenFeature([3], dtype=tf.float32),
-                'example/dom_gyro': tf.io.FixedLenFeature([3], dtype=tf.float32),
-                'example/ndom_acc': tf.io.FixedLenFeature([3], dtype=tf.float32),
-                'example/ndom_gyro': tf.io.FixedLenFeature([3], dtype=tf.float32)
-        })
-        label = tf.cast(table.lookup(features['example/{}'.format(FLAGS.label_mode)]), tf.int32)
-        features = tf.stack(
-            [features['example/dom_acc'], features['example/dom_gyro'],
-             features['example/ndom_acc'], features['example/ndom_gyro']], 0)
-        features = tf.squeeze(tf.reshape(features, [-1, 12]))
-        return features, label
-
-    if FLAGS.input_mode == "video":
-        return input_parser_video
-    elif FLAGS.input_mode == "inert":
-        return input_parser_inert
-
-def _get_sequence_batch_fn(is_training, is_predicting):
-    """Return sliding batched dataset or batched dataset."""
-    if is_training or is_predicting:
-        shift = int(FLAGS.input_fps/FLAGS.seq_fps)
-    else:
-        shift = FLAGS.input_length
-    return lambda dataset: dataset.window(
-        size=FLAGS.input_length, shift=shift, drop_remainder=True).flat_map(
-            lambda f_w, l_w: tf.data.Dataset.zip(
-                (f_w.batch(FLAGS.input_length), l_w.batch(FLAGS.input_length))))
-
-def _get_transformation_parser(is_training):
-    """Return the data transformation parser."""
-
-    def image_transformation_parser(image_data, label_data):
-        """Apply distortions to image sequences."""
-
-        if is_training:
-
-            # Random rotation
-            rotation_degree = tf.random.uniform([], -2.0, 2.0)
-            rotation_radian = rotation_degree * math.pi / 180
-            image_data = tfa.image.rotate(image_data,
-                angles=rotation_radian)
-
-            # Random crop
-            diff = ORIGINAL_SIZE - FRAME_SIZE + 1
-            limit = [1, diff, diff, 1]
-            offset = tf.random.uniform(shape=tf.shape(limit),
-                dtype=tf.int32, maxval=tf.int32.max) % limit
-            size = [FLAGS.input_length, FRAME_SIZE, FRAME_SIZE, NUM_CHANNELS]
-            image_data = tf.slice(image_data, offset, size)
-
-            # Random horizontal flip
-            condition = tf.less(tf.random.uniform([], 0, 1.0), .5)
-            image_data = tf.cond(pred=condition,
-                true_fn=lambda: tf.image.flip_left_right(image_data),
-                false_fn=lambda: image_data)
-
-            # Random brightness change
-            delta = tf.random.uniform([], -0.2, 0.2)
-            image_data = tf.image.adjust_brightness(image_data, delta)
-
-            # Random contrast change -
-            contrast_factor = tf.random.uniform([], 0.8, 1.2)
-            image_data = tf.image.adjust_contrast(image_data, 1.2)
-
-        else:
-
-            # Crop the central [height, width].
-            image_data = tf.image.resize_with_crop_or_pad(
-                image_data, FRAME_SIZE, FRAME_SIZE)
-            size = [FLAGS.input_length, FRAME_SIZE, FRAME_SIZE, NUM_CHANNELS]
-            image_data.set_shape(size)
-
-        # Subtract off the mean and divide by the variance of the pixels.
-        def _standardization(images):
-            """Linearly scales image data to have zero mean and unit variance."""
-            num_pixels = tf.reduce_prod(tf.shape(images))
-            images_mean = tf.reduce_mean(images)
-            variance = tf.reduce_mean(tf.square(images)) - tf.square(images_mean)
-            variance = tf.nn.relu(variance)
-            stddev = tf.sqrt(variance)
-            # Apply a minimum normalization that protects us against uniform images.
-            min_stddev = tf.math.rsqrt(tf.cast(num_pixels, dtype=tf.float32))
-            pixel_value_scale = tf.maximum(stddev, min_stddev)
-            pixel_value_offset = images_mean
-            images = tf.subtract(images, pixel_value_offset)
-            images = tf.divide(images, pixel_value_scale)
-            return images
-        image_data = _standardization(image_data)
-
-        return image_data, label_data
-
-    def inert_transformation_parser(inert_data, label_data):
-        """Apply distortions to inertial sequences."""
-
-        if is_training:
-            # Random horizontal flip
-            def _flip_inertial(inert_data):
-                """Flip hands"""
-                mult = tf.tile(tf.concat([FLIP_ACC, FLIP_GYRO], axis=0), [2])
-                inert_data = tf.math.multiply(inert_data, mult)
-                return tf.concat([inert_data[:, 6:12], inert_data[:, 0:6]], axis=1)
-            condition = tf.less(tf.random.uniform([], 0, 1.0), .5)
-            inert_data = tf.cond(pred=condition,
-                true_fn=lambda: _flip_inertial(inert_data),
-                false_fn=lambda: inert_data)
-
-        return inert_data, label_data
-
-    if FLAGS.input_mode == "video":
-        return image_transformation_parser
-    elif FLAGS.input_mode == "inert":
-        return inert_transformation_parser
-
-def _get_num_classes(label_category):
-    return NUM_EVENT_CLASSES_MAP[label_category]
-
-def _get_hash_table(label_category):
-    if label_category == 'label_1':
-        table = tf.lookup.StaticHashTable(
-            tf.lookup.KeyValueTensorInitializer(
-                ["Idle", "Intake"], [0, 1]), -1)
-    elif label_category == 'label_2':
-        table = tf.lookup.StaticHashTable(
-            tf.lookup.KeyValueTensorInitializer(
-                ["Idle", "Intake-Eat", "Intake-Drink"], [0, 1, 2]), -1)
-    elif label_category == 'label_3':
-        table = tf.lookup.StaticHashTable(
-            tf.lookup.KeyValueTensorInitializer(
-                ["Idle", "Right", "Left", "Both"], [0, 1, 2, 3]), -1)
-    elif label_category == 'label_4':
-        table = tf.lookup.StaticHashTable(
-            tf.lookup.KeyValueTensorInitializer(
-                ["Idle", "Hand", "Fork", "Spoon", "Knife", "Finger", "Cup"], [0, 1, 2, 3, 4, 5, 6]), -1)
-    return table
 
 def main(arg=None):
     if FLAGS.mode == 'train_and_evaluate':
