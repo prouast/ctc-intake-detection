@@ -14,6 +14,7 @@ from ctc import collapse
 from model_saver import ModelSaver
 import metrics
 import video_small_cnn_lstm
+import video_resnet_cnn_lstm
 import inert_small_cnn_lstm
 import inert_heydarian_cnn_lstm
 
@@ -37,7 +38,7 @@ LR_BOUNDARIES = [5, 10, 15]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
 LR_DECAY_RATE = 0.85
 LR_DECAY_STEPS = 1
-NUM_SHUFFLE = 50000
+NUM_SHUFFLE = 1000
 AUTOTUNE = tf.data.experimental.AUTOTUNE
 
 FLAGS = flags.FLAGS
@@ -71,8 +72,8 @@ flags.DEFINE_enum(name='mode',
     default="train_and_evaluate", enum_values=["train_and_evaluate", "predict"],
     help='What mode should tensorflow be started in')
 flags.DEFINE_enum(name='model',
-    default='inert_small_cnn_lstm', enum_values=["video_small_cnn_lstm", "inert_small_cnn_lstm", "inert_heydarian_cnn_lstm"],
-    help='Select the model: {video_small_cnn_lstm, inert_small_cnn_lstm, inert_heydarian_cnn_lstm}')
+    default='inert_small_cnn_lstm', enum_values=["video_small_cnn_lstm", "video_resnet_cnn_lstm", "inert_small_cnn_lstm", "inert_heydarian_cnn_lstm"],
+    help='Select the model: {video_small_cnn_lstm, video_resnet_cnn_lstm, inert_small_cnn_lstm, inert_heydarian_cnn_lstm}')
 flags.DEFINE_string(name='model_ckpt',
     default='run', help='Model checkpoint for prediction (e.g., model_5000).')
 flags.DEFINE_string(name='model_dir',
@@ -99,6 +100,8 @@ def train_and_evaluate():
     # Read the model choice
     if FLAGS.model == "video_small_cnn_lstm":
         model = video_small_cnn_lstm.Model(num_classes, L2_LAMBDA)
+    elif FLAGS.model == "video_resnet_cnn_lstm":
+        model = video_resnet_cnn_lstm.Model(num_classes, L2_LAMBDA)
     elif FLAGS.model == "inert_small_cnn_lstm":
         model = inert_small_cnn_lstm.Model(num_classes, L2_LAMBDA)
     elif FLAGS.model == "inert_heydarian_cnn_lstm":
