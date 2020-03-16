@@ -32,31 +32,25 @@ class Model(tf.keras.Model):
     def __init__(self, num_classes, l2_lambda):
         super(Model, self).__init__()
         self.num_conv = [64, 128, 256]
-        self.num_dense = 64
         self.num_lstm = [64, 128]
         self.conv_blocks = []
         for i, num_filters in enumerate(self.num_conv):
             self.conv_blocks.append(ConvBlock(num_filters, True, l2_lambda))
-        self.dense_1 = tf.keras.layers.Dense(
-            units=self.num_dense, activation=tf.nn.relu,
-            kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
-        self.dropout = tf.keras.layers.Dropout(rate=0.5)
         self.lstm_blocks = []
         for i, num_units in enumerate(self.num_lstm):
             self.lstm_blocks.append(tf.keras.layers.LSTM(
                 units=num_units, return_sequences=True,
                 kernel_regularizer=tf.keras.regularizers.l2(l2_lambda)))
-        self.dense_2 = tf.keras.layers.Dense(
+        self.dense = tf.keras.layers.Dense(
             units=num_classes,
             kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
+        self.dropout = tf.keras.layers.Dropout(rate=0.5)
 
     def __call__(self, inputs, training=False):
         for conv_block in self.conv_blocks:
             inputs = conv_block(inputs)
-        inputs = self.dense_1(inputs)
-        inputs = self.dropout(inputs)
         for lstm_block in self.lstm_blocks:
             inputs = lstm_block(inputs)
-        inputs = self.dense_2(inputs)
+        inputs = self.dense(inputs)
         inputs = self.dropout(inputs)
         return inputs

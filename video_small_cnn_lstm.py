@@ -56,6 +56,7 @@ class Model(tf.keras.Model):
             units=num_classes,
             kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
 
+    @tf.function
     def call(self, inputs, training=False):
         for conv_block in self.conv_blocks:
             inputs = conv_block(inputs)
