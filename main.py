@@ -11,13 +11,14 @@ from ctc import loss
 from ctc import collapse
 from model_saver import ModelSaver
 import metrics
+import oreba_dis
+import fic
+import clemson
 import oreba_video_small_cnn_lstm
 import oreba_video_resnet_cnn_lstm
 import oreba_inert_small_cnn_lstm
 import oreba_inert_heyd_cnn_lstm
-import oreba_dis
-import fic
-import clemson
+import clemson_small_cnn_lstm
 
 # Representation
 BLANK_INDEX = 0
@@ -70,7 +71,8 @@ flags.DEFINE_enum(name='mode',
 flags.DEFINE_enum(name='model',
     default='oreba_inert_small_cnn_lstm',
     enum_values=["oreba_video_small_cnn_lstm", "oreba_video_resnet_cnn_lstm",
-        "oreba_inert_small_cnn_lstm", "oreba_inert_heyd_cnn_lstm"],
+        "oreba_inert_small_cnn_lstm", "oreba_inert_heyd_cnn_lstm",
+        "clemson_small_cnn_lstm"],
     help='Select the model')
 flags.DEFINE_string(name='model_ckpt',
     default='run', help='Model checkpoint for prediction (e.g., model_5000).')
@@ -111,17 +113,20 @@ def train_and_evaluate():
 
     # Read the model choice
     if FLAGS.model == "oreba_video_small_cnn_lstm":
-        assert FLAGS.dataset == 'oreba_dis', "Dataset and model don't match"
+        assert FLAGS.dataset == 'oreba-dis', "Dataset and model don't match"
         model = oreba_video_small_cnn_lstm.Model(num_classes, seq_pool, L2_LAMBDA)
     elif FLAGS.model == "oreba_video_resnet_cnn_lstm":
-        assert FLAGS.dataset == 'oreba_dis', "Dataset and model don't match"
+        assert FLAGS.dataset == 'oreba-dis', "Dataset and model don't match"
         model = oreba_video_resnet_cnn_lstm.Model(num_classes, seq_pool, L2_LAMBDA)
     elif FLAGS.model == "oreba_inert_small_cnn_lstm":
+        assert FLAGS.dataset == 'oreba-dis', "Dataset and model don't match"
         model = oreba_inert_small_cnn_lstm.Model(num_classes, seq_pool, L2_LAMBDA)
-        assert FLAGS.dataset == 'oreba_dis', "Dataset and model don't match"
     elif FLAGS.model == "oreba_inert_heyd_cnn_lstm":
+        assert FLAGS.dataset == 'oreba-dis', "Dataset and model don't match"
         model = oreba_inert_heyd_cnn_lstm.Model(num_classes, seq_pool, L2_LAMBDA)
-        assert FLAGS.dataset == 'oreba_dis', "Dataset and model don't match"
+    elif FLAGS.model == "clemson_small_cnn_lstm":
+        assert FLAGS.dataset == 'clemson', "Dataset and model don't match"
+        model = clemson_small_cnn_lstm.Model(num_classes, seq_pool, L2_LAMBDA)
     else:
         raise ValueError("Model {} not implemented!".format(FLAGS.model))
 
