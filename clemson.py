@@ -9,7 +9,7 @@ from absl import logging
 AUTOTUNE = tf.data.experimental.AUTOTUNE
 NUM_CHANNELS = 3
 NUM_EVENT_CLASSES_MAP = {"label_1": 1, "label_2": 3, "label_3": 5, "label_4": 4}
-NUM_TRAINING_FILES = TODO
+NUM_TRAINING_FILES = 302
 FLIP_ACC = [-1., 1., 1.]
 FLIP_GYRO = [1., -1., -1.]
 
