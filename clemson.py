@@ -1,4 +1,4 @@
-"""Pipeline for the FIC dataset"""
+"""Pipeline for the Clemson dataset"""
 
 import math
 import os
@@ -8,8 +8,8 @@ from absl import logging
 
 AUTOTUNE = tf.data.experimental.AUTOTUNE
 NUM_CHANNELS = 3
-NUM_EVENT_CLASSES_MAP = {"label_1": 1}
-NUM_TRAINING_FILES = 20
+NUM_EVENT_CLASSES_MAP = {"label_1": 1, "label_2": 3, "label_3": 5, "label_4": 4}
+NUM_TRAINING_FILES = TODO
 FLIP_ACC = [-1., 1., 1.]
 FLIP_GYRO = [1., -1., -1.]
 
@@ -27,7 +27,19 @@ class Dataset():
         if label_category == 'label_1':
             table = tf.lookup.StaticHashTable(
                 tf.lookup.KeyValueTensorInitializer(
-                    ["Idle", "Intake"], [0, 1]), -1)
+                    ["Idle", "bite"], [0, 1]), -1)
+        elif label_category == 'label_2':
+            table = tf.lookup.StaticHashTable(
+                tf.lookup.KeyValueTensorInitializer(
+                    ["Idle", "left", "right", "both"], [0, 1, 2, 3]), -1)
+        elif label_category == 'label_3':
+            table = tf.lookup.StaticHashTable(
+                tf.lookup.KeyValueTensorInitializer(
+                    ["Idle", "chopsticks", "fork", "hand", "knife", "spoon"], [0, 1, 2, 3, 4, 5]), -1)
+        elif label_category == 'label_4':
+            table = tf.lookup.StaticHashTable(
+                tf.lookup.KeyValueTensorInitializer(
+                    ["Idle", "bowl", "glass", "mug", "plate"], [0, 1, 2, 3, 4]), -1)
         return table
 
     def __get_input_parser(self, table):
@@ -36,7 +48,7 @@ class Dataset():
             """The input parser"""
             features = tf.io.parse_single_example(
                 serialized_example, {
-                    'example/label_1': tf.io.FixedLenFeature([], dtype=tf.string),
+                    'example/{}'.format(self.label_mode): tf.io.FixedLenFeature([], dtype=tf.string),
                     'example/acc': tf.io.FixedLenFeature([3], dtype=tf.float32),
                     'example/gyro': tf.io.FixedLenFeature([3], dtype=tf.float32)
             })
