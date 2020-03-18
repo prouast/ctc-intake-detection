@@ -16,6 +16,8 @@ import video_resnet_cnn_lstm
 import inert_small_cnn_lstm
 import inert_heydarian_cnn_lstm
 import oreba_dis
+import fic
+import clemson
 
 # Representation
 BLANK_INDEX = 0
@@ -93,6 +95,9 @@ def train_and_evaluate():
             FLAGS.input_length, FLAGS.input_fps, FLAGS.seq_fps)
     elif FLAGS.dataset == 'fic':
         dataset = fic.Dataset(FLAGS.label_mode, FLAGS.input_length,
+            FLAGS.input_fps, FLAGS.seq_fps)
+    elif FLAGS.dataset == 'clemson':
+        dataset = clemson.Dataset(FLAGS.label_mode, FLAGS.input_length,
             FLAGS.input_fps, FLAGS.seq_fps)
     else:
         raise ValueError("Dataset {} not implemented!".format(FLAGS.dataset))
