@@ -1,4 +1,4 @@
-"""CNN-LSTM Model"""
+"""CNN-LSTM Model for OREBA-DIS dataset from Rouast et al. (2019)"""
 
 import tensorflow as tf
 
@@ -28,8 +28,11 @@ class ConvBlock(tf.keras.Model):
 class Model(tf.keras.Model):
     """CNN-LSTM Model for inertial data"""
 
-    def __init__(self, num_classes, l2_lambda):
+    def __init__(self, num_classes, seq_pool, l2_lambda):
         super(Model, self).__init__()
+        # Make sure model implied seq_pool equals args implied seq_pool
+        assert seq_pool == 1, \
+            "seq_pool: Model implied == 1 != {} == arg implied".format(seq_pool)
         self.num_conv = [32, 32, 64, 64]
         self.num_dense = 1024
         self.num_lstm = [128]

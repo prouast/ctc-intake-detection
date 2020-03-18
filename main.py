@@ -11,10 +11,10 @@ from ctc import loss
 from ctc import collapse
 from model_saver import ModelSaver
 import metrics
-import video_small_cnn_lstm
-import video_resnet_cnn_lstm
-import inert_small_cnn_lstm
-import inert_heydarian_cnn_lstm
+import oreba_video_small_cnn_lstm
+import oreba_video_resnet_cnn_lstm
+import oreba_inert_small_cnn_lstm
+import oreba_inert_heyd_cnn_lstm
 import oreba_dis
 import fic
 import clemson
@@ -68,8 +68,10 @@ flags.DEFINE_enum(name='mode',
     default="train_and_evaluate", enum_values=["train_and_evaluate", "predict"],
     help='What mode should tensorflow be started in')
 flags.DEFINE_enum(name='model',
-    default='inert_small_cnn_lstm', enum_values=["video_small_cnn_lstm", "video_resnet_cnn_lstm", "inert_small_cnn_lstm", "inert_heydarian_cnn_lstm"],
-    help='Select the model: {video_small_cnn_lstm, video_resnet_cnn_lstm, inert_small_cnn_lstm, inert_heydarian_cnn_lstm}')
+    default='oreba_inert_small_cnn_lstm',
+    enum_values=["oreba_video_small_cnn_lstm", "oreba_video_resnet_cnn_lstm",
+        "oreba_inert_small_cnn_lstm", "oreba_inert_heyd_cnn_lstm"],
+    help='Select the model')
 flags.DEFINE_string(name='model_ckpt',
     default='run', help='Model checkpoint for prediction (e.g., model_5000).')
 flags.DEFINE_string(name='model_dir',
@@ -77,7 +79,7 @@ flags.DEFINE_string(name='model_dir',
 flags.DEFINE_enum(name='predict_mode',
     default='batch_level_voted', enum_values=['video_level', 'batch_level', 'batch_level_voted'],
     help='How should the predictions be aggregated?')
-flags.DEFINE_integer(name='seq_fps',
+flags.DEFINE_float(name='seq_fps',
     default=8, help='Target frames per seconds in sequence generation.')
 flags.DEFINE_string(name='train_dir',
     default='data/inert/train', help='Directory for training data.')
@@ -108,14 +110,18 @@ def train_and_evaluate():
     num_classes = num_event_classes + 1
 
     # Read the model choice
-    if FLAGS.model == "video_small_cnn_lstm":
-        model = video_small_cnn_lstm.Model(num_classes, L2_LAMBDA)
-    elif FLAGS.model == "video_resnet_cnn_lstm":
-        model = video_resnet_cnn_lstm.Model(num_classes, L2_LAMBDA)
-    elif FLAGS.model == "inert_small_cnn_lstm":
-        model = inert_small_cnn_lstm.Model(num_classes, L2_LAMBDA)
-    elif FLAGS.model == "inert_heydarian_cnn_lstm":
-        model = inert_heydarian_cnn_lstm.Model(num_classes, L2_LAMBDA)
+    if FLAGS.model == "oreba_video_small_cnn_lstm":
+        assert FLAGS.dataset == 'oreba_dis', "Dataset and model don't match"
+        model = oreba_video_small_cnn_lstm.Model(num_classes, seq_pool, L2_LAMBDA)
+    elif FLAGS.model == "oreba_video_resnet_cnn_lstm":
+        assert FLAGS.dataset == 'oreba_dis', "Dataset and model don't match"
+        model = oreba_video_resnet_cnn_lstm.Model(num_classes, seq_pool, L2_LAMBDA)
+    elif FLAGS.model == "oreba_inert_small_cnn_lstm":
+        model = oreba_inert_small_cnn_lstm.Model(num_classes, seq_pool, L2_LAMBDA)
+        assert FLAGS.dataset == 'oreba_dis', "Dataset and model don't match"
+    elif FLAGS.model == "oreba_inert_heyd_cnn_lstm":
+        model = oreba_inert_heyd_cnn_lstm.Model(num_classes, seq_pool, L2_LAMBDA)
+        assert FLAGS.dataset == 'oreba_dis', "Dataset and model don't match"
     else:
         raise ValueError("Model {} not implemented!".format(FLAGS.model))
 

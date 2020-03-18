@@ -1,4 +1,4 @@
-"""ResNet-50 CNN-LSTM Model"""
+"""ResNet-50 CNN-LSTM Model for OREBA-DIS dataset from Rouast et al. (2019)"""
 
 import tensorflow as tf
 
@@ -94,8 +94,11 @@ class block_layer(tf.keras.Model):
 class Model(tf.keras.Model):
     """ResNet-50 CNN-LSTM Model"""
 
-    def __init__(self, num_classes, l2_lambda):
+    def __init__(self, num_classes, seq_pool, l2_lambda):
         super(Model, self).__init__()
+        # Make sure model implied seq_pool equals args implied seq_pool
+        assert seq_pool == 1, \
+            "seq_pool: Model implied == 1 != {} == arg implied".format(seq_pool)
         self.block_sizes = [3, 4, 6, 3]
         self.block_strides = [1, 2, 2, 2]
         self.num_filters = 64

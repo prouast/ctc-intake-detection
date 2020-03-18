@@ -1,12 +1,15 @@
-"""CNN-LSTM Model from Heydarian et al. (2020)"""
+"""CNN-LSTM Model for OREBA-DIS dataset from Heydarian et al. (2020)"""
 
 import tensorflow as tf
 
 class Model(tf.keras.Model):
     """CNN-LSTM for inertial data"""
 
-    def __init__(self, num_classes, l2_lambda):
+    def __init__(self, num_classes, seq_pool, l2_lambda):
         super(Model, self).__init__()
+        # Make sure model implied seq_pool equals arg implied seq_pool
+        assert seq_pool == 16, \
+            "seq_pool: Model implied == 16 != {} == arg implied".format(seq_pool)
         self.conv1d_1 = tf.keras.layers.Conv1D(
             filters=128, kernel_size=1, padding='same',
             activation=tf.nn.relu,
