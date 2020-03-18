@@ -18,7 +18,7 @@ FLIP_GYRO = [-1., 1., -1.]
 
 logging.set_verbosity(logging.INFO)
 
-class OREBA():
+class Dataset():
 
     def __init__(self, label_mode, input_mode, input_length, input_fps, seq_fps):
         self.label_mode = label_mode

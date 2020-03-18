@@ -89,8 +89,11 @@ def train_and_evaluate():
 
     # Get dataset
     if FLAGS.dataset == 'oreba-dis':
-        dataset = oreba_dis.OREBA(FLAGS.label_mode, FLAGS.input_mode,
+        dataset = oreba_dis.Dataset(FLAGS.label_mode, FLAGS.input_mode,
             FLAGS.input_length, FLAGS.input_fps, FLAGS.seq_fps)
+    elif FLAGS.dataset == 'fic':
+        dataset = fic.Dataset(FLAGS.label_mode, FLAGS.input_length,
+            FLAGS.input_fps, FLAGS.seq_fps)
     else:
         raise ValueError("Dataset {} not implemented!".format(FLAGS.dataset))
 
@@ -355,7 +358,7 @@ def predict():
     assert FLAGS.batch_size == 1, "batch_size should be 1 for prediction"
     # Get dataset
     if FLAGS.dataset == 'oreba-dis':
-        dataset = oreba_dis.OREBA(FLAGS.label_mode, FLAGS.input_mode,
+        dataset = oreba_dis.Dataset(FLAGS.label_mode, FLAGS.input_mode,
             FLAGS.input_length, FLAGS.input_fps, FLAGS.seq_fps)
     else:
         raise ValueError("Dataset {} not implemented!".format(FLAGS.dataset))
