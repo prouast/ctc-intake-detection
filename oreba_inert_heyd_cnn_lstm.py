@@ -38,7 +38,8 @@ class Model(tf.keras.Model):
             units=num_classes,
             kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
 
-    def call(self, inputs, training=False):
+    @tf.function
+    def __call__(self, inputs, training=False):
         inputs = self.conv1d_1(inputs)
         inputs = self.dropout(inputs)
         inputs = self.max_pool(inputs)

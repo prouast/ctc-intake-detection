@@ -20,7 +20,8 @@ class conv2d_fixed_padding(tf.keras.Model):
             padding=('SAME' if self.strides_one else 'VALID'),
             kernel_initializer=tf.keras.initializers.VarianceScaling())
 
-    def call(self, inputs):
+    @tf.function
+    def __call__(self, inputs):
         if not self.strides_one:
             pad_total = self.kernel_size - 1
             pad_beg = pad_total // 2
@@ -53,7 +54,8 @@ class block(tf.keras.Model):
         self.conv2d_3_fixed_padding = conv2d_fixed_padding(
             filters=4*filters, kernel_size=1, strides=1)
 
-    def call(self, inputs):
+    @tf.function
+    def __call__(self, inputs):
         shortcut = inputs
         inputs = self.batch_norm_1(inputs)
         inputs = tf.nn.relu(inputs)
@@ -84,7 +86,8 @@ class block_layer(tf.keras.Model):
             self.blocks.append(
                 block(filters=filters, projection_shortcut=None, strides=1))
 
-    def call(self, inputs):
+    @tf.function
+    def __call__(self, inputs):
         inputs = self.block(inputs)
         for block in self.blocks:
             inputs = block(inputs)
@@ -129,7 +132,8 @@ class Model(tf.keras.Model):
         self.dense = tf.keras.layers.Dense(
             units=num_classes)
 
-    def call(self, inputs, training=False):
+    @tf.function
+    def __call__(self, inputs, training=False):
         # Resize inputs to ImageNet size
         num_seq = inputs.get_shape()[1]
         original_frame_size = inputs.get_shape()[2]

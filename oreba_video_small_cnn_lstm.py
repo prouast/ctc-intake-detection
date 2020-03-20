@@ -17,7 +17,8 @@ class ConvBlock(tf.keras.Model):
         if max_pool:
             self.max_pool = tf.keras.layers.MaxPool2D(pool_size=2, strides=2)
 
-    def call(self, inputs, training=False):
+    @tf.function
+    def __call__(self, inputs, training=False):
         inputs = self.conv(inputs)
         inputs = self.bn(inputs)
         inputs = self.dropout(inputs)
@@ -58,7 +59,8 @@ class Model(tf.keras.Model):
             units=num_classes,
             kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
 
-    def call(self, inputs, training=False):
+    @tf.function
+    def __call__(self, inputs, training=False):
         for conv_block in self.conv_blocks:
             inputs = conv_block(inputs)
         inputs = self.flatten(inputs)
