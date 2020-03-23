@@ -11,6 +11,7 @@ from tensorflow.python.platform import gfile
 from metrics import evaluate_interval_detection
 import clemson
 import oreba_dis
+import fic
 
 FLAGS = flags.FLAGS
 flags.DEFINE_enum(name='dataset',
@@ -66,7 +67,10 @@ def evaluate_with_parameters(dataset, filenames, T1, T2, T3, T4, freq):
         for t, (features, label) in enumerate(data):
             labels.append(int(label))
             # Roll velocity is the radial velocity of x axis in features
-            v_t = features[:,:,5]
+            if FLAGS.dataset == 'clemson':
+                v_t = features[:,:,5]
+            elif FLAGS.dataset == 'fic' or FLAGS.dataset == 'oreba-dis':
+                v_t = features[:,:,4]
             #logging.info("Vt = {0} label = {1}".format(v_t, int(label)))
             # Wrist roll velocity must surpass a positive threshold.
             if int(v_t) > T1 and event == 0:
@@ -109,7 +113,7 @@ def estimate_parameters(dataset, filenames, freq):
     """Estimate paramter values from a range of predetermined values"""
     # Param options
     param_options = [(T12, -T12, T3, T4) for T12, T3, T4 in list(itertools.product( \
-        range(5, 25, 5), range(1, 3, 1), range(4, 10, 2)))]
+        range(5, 25, 5), range(1, 3, 1), range(4, 8, 2)))]
     # Evaluate options
     all_f1 = []
     for T1, T2, T3, T4 in param_options:
