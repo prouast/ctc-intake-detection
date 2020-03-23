@@ -113,7 +113,7 @@ def estimate_parameters(dataset, filenames, freq):
     """Estimate paramter values from a range of predetermined values"""
     # Param options
     param_options = [(T12, -T12, T3, T4) for T12, T3, T4 in list(itertools.product( \
-        range(5, 25, 5), range(1, 3, 1), range(4, 8, 2)))]
+        range(5, 30, 5), range(1, 4, 1), range(2, 10, 2)))]
     # Evaluate options
     all_f1 = []
     for T1, T2, T3, T4 in param_options:
@@ -124,7 +124,7 @@ def estimate_parameters(dataset, filenames, freq):
             freq=freq)
         all_f1.append(f1)
 
-    return param_options[np.argmax(all_f1)], np.max(f1)
+    return param_options[np.argmax(all_f1)], np.max(all_f1)
 
 
 def main(arg=None):
