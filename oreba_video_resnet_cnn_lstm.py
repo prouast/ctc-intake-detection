@@ -2,6 +2,7 @@
 
 import tensorflow as tf
 
+SEQ_POOL = 1
 BATCH_NORM_DECAY = 0.997
 BATCH_NORM_EPSILON = 1e-5
 IMAGENET_SIZE = 224
@@ -97,11 +98,9 @@ class block_layer(tf.keras.Model):
 class Model(tf.keras.Model):
     """ResNet-50 CNN-LSTM Model"""
 
-    def __init__(self, num_classes, seq_pool, l2_lambda):
+    def __init__(self, num_classes, input_length, l2_lambda):
         super(Model, self).__init__()
-        # Make sure model implied seq_pool equals args implied seq_pool
-        assert seq_pool == 1, \
-            "seq_pool: Model implied == 1 != {} == arg implied".format(seq_pool)
+        self.input_length = input_length
         self.block_sizes = [3, 4, 6, 3]
         self.block_strides = [1, 2, 2, 2]
         self.num_filters = 64
@@ -158,3 +157,11 @@ class Model(tf.keras.Model):
         inputs = self.lstm(inputs)
         inputs = self.dense(inputs)
         return inputs
+
+    @tf.function
+    def labels(self, labels, batch_size=None):
+        """No pooling"""
+        return labels
+
+    def seq_length(self):
+        return self.input_length

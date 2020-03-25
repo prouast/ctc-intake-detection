@@ -17,11 +17,11 @@ logging.set_verbosity(logging.INFO)
 
 class Dataset():
 
-    def __init__(self, label_mode, input_length, input_fps, seq_fps):
+    def __init__(self, label_mode, input_length, seq_shift):
         self.label_mode = label_mode
         self.input_length = input_length
         self.input_fps = input_fps
-        self.seq_fps = seq_fps
+        self.seq_shift = seq_shift
 
     def __get_hash_table(self, label_category):
         if label_category == 'label_1':
@@ -62,7 +62,7 @@ class Dataset():
     def __get_sequence_batch_fn(self, is_training, is_predicting):
         """Return sliding batched dataset or batched dataset."""
         if is_training or is_predicting:
-            shift = int(self.input_fps/self.seq_fps)
+            shift = self.seq_shift
         else:
             shift = self.input_length
         return lambda dataset: dataset.window(

@@ -31,7 +31,7 @@ LR_BOUNDARIES = [5, 10, 15]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
 LR_DECAY_RATE = 0.85
 LR_DECAY_STEPS = 1
-NUM_SHUFFLE = 1000
+NUM_SHUFFLE = 100000
 
 LABEL_MODES = oreba_dis.NUM_EVENT_CLASSES_MAP.keys()
 
@@ -50,8 +50,6 @@ flags.DEFINE_integer(name='input_length',
 flags.DEFINE_enum(name='input_mode',
     default="inert", enum_values=["video", "inert"],
     help='What is the input mode')
-flags.DEFINE_integer(name='input_fps',
-    default=64, help='Frames per seconds in input data.')
 flags.DEFINE_enum(name='label_mode',
     default="label_1", enum_values=LABEL_MODES,
     help='What is the label mode')
@@ -81,8 +79,8 @@ flags.DEFINE_string(name='model_dir',
 flags.DEFINE_enum(name='predict_mode',
     default='batch_level_voted', enum_values=['video_level', 'batch_level', 'batch_level_voted'],
     help='How should the predictions be aggregated?')
-flags.DEFINE_float(name='seq_fps',
-    default=8, help='Target frames per seconds in sequence generation.')
+flags.DEFINE_integer(name='seq_shift',
+    default=1, help='Shift when generating sequences.')
 flags.DEFINE_string(name='train_dir',
     default='data/inert/train', help='Directory for training data.')
 flags.DEFINE_integer(name='train_epochs',
@@ -96,39 +94,46 @@ def train_and_evaluate():
     # Get dataset
     if FLAGS.dataset == 'oreba-dis':
         dataset = oreba_dis.Dataset(FLAGS.label_mode, FLAGS.input_mode,
-            FLAGS.input_length, FLAGS.input_fps, FLAGS.seq_fps)
+            FLAGS.input_length, FLAGS.seq_shift)
     elif FLAGS.dataset == 'fic':
         dataset = fic.Dataset(FLAGS.label_mode, FLAGS.input_length,
-            FLAGS.input_fps, FLAGS.seq_fps)
+            FLAGS.seq_shift)
     elif FLAGS.dataset == 'clemson':
         dataset = clemson.Dataset(FLAGS.label_mode, FLAGS.input_length,
-            FLAGS.input_fps, FLAGS.seq_fps)
+            FLAGS.seq_shift)
     else:
         raise ValueError("Dataset {} not implemented!".format(FLAGS.dataset))
 
     # Read the representation choice
-    seq_pool = int(FLAGS.input_fps/FLAGS.seq_fps)
     num_event_classes = dataset.num_classes()
     num_classes = num_event_classes + 1
 
     # Read the model choice
     if FLAGS.model == "oreba_video_small_cnn_lstm":
         assert FLAGS.dataset == 'oreba-dis', "Dataset and model don't match"
-        model = oreba_video_small_cnn_lstm.Model(num_classes, seq_pool, L2_LAMBDA)
+        model = oreba_video_small_cnn_lstm.Model(num_classes=num_classes,
+            input_length=FLAGS.input_length, l2_lambda=L2_LAMBDA)
     elif FLAGS.model == "oreba_video_resnet_cnn_lstm":
         assert FLAGS.dataset == 'oreba-dis', "Dataset and model don't match"
-        model = oreba_video_resnet_cnn_lstm.Model(num_classes, seq_pool, L2_LAMBDA)
+        model = oreba_video_resnet_cnn_lstm.Model(num_classes=num_classes,
+            input_length=FLAGS.input_length, l2_lambda=L2_LAMBDA)
     elif FLAGS.model == "oreba_inert_small_cnn_lstm":
         assert FLAGS.dataset == 'oreba-dis', "Dataset and model don't match"
-        model = oreba_inert_small_cnn_lstm.Model(num_classes, seq_pool, L2_LAMBDA)
+        model = oreba_inert_small_cnn_lstm.Model(num_classes=num_classes,
+            input_length=FLAGS.input_length, l2_lambda=L2_LAMBDA)
     elif FLAGS.model == "oreba_inert_heyd_cnn_lstm":
         assert FLAGS.dataset == 'oreba-dis', "Dataset and model don't match"
-        model = oreba_inert_heyd_cnn_lstm.Model(num_classes, seq_pool, L2_LAMBDA)
+        model = oreba_inert_heyd_cnn_lstm.Model(num_classes=num_classes,
+            input_length=FLAGS.input_length, l2_lambda=L2_LAMBDA)
     elif FLAGS.model == "clemson_small_cnn_lstm":
         assert FLAGS.dataset == 'clemson', "Dataset and model don't match"
-        model = clemson_small_cnn_lstm.Model(num_classes, seq_pool, L2_LAMBDA)
+        model = clemson_small_cnn_lstm.Model(num_classes=num_classes,
+            input_length=FLAGS.input_length, l2_lambda=L2_LAMBDA)
     else:
         raise ValueError("Model {} not implemented!".format(FLAGS.model))
+
+    # Get the seq_length
+    seq_length = model.seq_length()
 
     # Instantiate learning rate schedule and optimizer
     if FLAGS.lr_decay_fn == "exponential":
@@ -148,7 +153,6 @@ def train_and_evaluate():
         is_predicting=False, data_dir=FLAGS.eval_dir, num_shuffle=NUM_SHUFFLE)
 
     # Instantiate the metrics
-    seq_length = int(FLAGS.input_length / seq_pool)
     train_metrics = {
         'mean_precision': keras.metrics.Mean(),
         'mean_recall': keras.metrics.Mean(),
@@ -198,9 +202,8 @@ def train_and_evaluate():
         # Iterate over training batches
         for step, (train_features, train_labels) in enumerate(train_dataset):
 
-            # Adjust labels by slicing if necessary
-            train_labels = _adjust_labels(train_labels, seq_pool,
-                FLAGS.input_length, FLAGS.batch_size)
+            # Adjust labels as specified by model
+            train_labels = model.labels(train_labels, batch_size=FLAGS.batch_size)
 
             # Open a GradientTape to record the operations run during forward pass
             with tf.GradientTape() as tape:
@@ -282,9 +285,9 @@ def train_and_evaluate():
                 # Iterate through eval batches
                 for i, (eval_features, eval_labels) in enumerate(eval_dataset):
 
-                    # Adjust seq_length and labels
-                    eval_labels = _adjust_labels(eval_labels, seq_pool,
-                        FLAGS.input_length, FLAGS.batch_size)
+                    # Adjust labels as specified by model
+                    eval_labels = model.labels(eval_labels,
+                        batch_size=FLAGS.batch_size)
 
                     # Run the forward pass
                     eval_logits = model(eval_features, training=False)
@@ -375,12 +378,10 @@ def predict():
     # Get dataset
     if FLAGS.dataset == 'oreba-dis':
         dataset = oreba_dis.Dataset(FLAGS.label_mode, FLAGS.input_mode,
-            FLAGS.input_length, FLAGS.input_fps, FLAGS.seq_fps)
+            FLAGS.input_length, FLAGS.seq_shift)
     else:
         raise ValueError("Dataset {} not implemented!".format(FLAGS.dataset))
     # Get the model
-    seq_pool = int(FLAGS.input_fps/FLAGS.seq_fps)
-    seq_length = int(FLAGS.input_length / seq_pool)
     num_event_classes = dataset.num_classes()
     num_classes = num_event_classes + 1
     if FLAGS.model == "video_small_cnn_lstm":
@@ -391,6 +392,8 @@ def predict():
         model = inert_heydarian_cnn_lstm.Model(num_classes, L2_LAMBDA)
     else:
         raise ValueError("Model {} not implemented!".format(FLAGS.model))
+    # Get the seq length
+    seq_length = model.seq_length()
     # Load weights
     model.load_weights(os.path.join(FLAGS.model_dir, "checkpoints", FLAGS.model_ckpt))
     # Set up metrics
@@ -409,9 +412,8 @@ def predict():
             is_predicting=True, data_dir=filename)
         # Iterate through batches
         for i, (b_features, b_labels) in enumerate(data):
-            # Adjust labels
-            b_labels = _adjust_labels(b_labels, seq_pool,
-                FLAGS.input_length, FLAGS.batch_size)
+            # Adjust labels as specified by model
+            b_labels = model.labels(b_labels, batch_size=FLAGS.batch_size)
             # Run the forward pass
             b_logits = model(b_features, training=False)
             # Collect labels and logits
@@ -531,22 +533,6 @@ class Adam(keras.optimizers.Adam):
     def finish_epoch(self):
         """Increment epoch count"""
         return self._epochs.assign_add(1)
-
-def _adjust_labels(labels, seq_pool, seq_length, batch_size=None):
-    """If seq_pool performed, adjust seq_length and labels by slicing"""
-    if batch_size is not None:
-        if seq_pool > 1:
-            labels = tf.strided_slice(
-                input_=labels, begin=[0, seq_pool-1], end=[batch_size, seq_length],
-                strides=[1, seq_pool])
-        labels = tf.reshape(labels, [batch_size, int(seq_length/seq_pool)])
-    else:
-        if seq_pool > 1:
-            labels = tf.strided_slice(
-                input_=labels, begin=[seq_pool-1], end=[seq_length],
-                strides=[seq_pool])
-        labels = tf.reshape(labels, [int(seq_length/seq_pool)])
-    return labels
 
 def main(arg=None):
     if FLAGS.mode == 'train_and_evaluate':

@@ -113,7 +113,7 @@ def estimate_parameters(dataset, filenames, freq):
     """Estimate paramter values from a range of predetermined values"""
     # Param options
     param_options = [(T12, -T12, T3, T4) for T12, T3, T4 in list(itertools.product( \
-        range(5, 30, 5), range(1, 4, 1), range(2, 10, 2)))]
+        range(25, 30, 5), range(1, 4, 1), range(2, 10, 2)))]
     # Evaluate options
     all_f1 = []
     for T1, T2, T3, T4 in param_options:
@@ -133,15 +133,15 @@ def main(arg=None):
     if FLAGS.dataset == 'oreba-dis':
         freq = 64
         dataset = oreba_dis.Dataset(label_mode="label_1", input_mode="inert",
-            input_length=1, input_fps=freq, seq_fps=freq)
+            input_length=1, seq_shift=1)
     elif FLAGS.dataset == 'fic':
         freq = 100
         dataset = fic.Dataset(label_mode="label_1", input_length=1,
-            input_fps=freq, seq_fps=freq)
+            seq_shift=1)
     elif FLAGS.dataset == 'clemson':
         freq = 15
         dataset = clemson.Dataset(label_mode="label_1", input_length=1,
-            input_fps=freq, seq_fps=freq)
+            seq_shift=1)
     else:
         raise ValueError("Dataset {} not implemented!".format(FLAGS.dataset))
     filenames = gfile.Glob(os.path.join(FLAGS.data_dir, "*.tfrecord"))
