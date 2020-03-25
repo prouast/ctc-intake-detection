@@ -4,7 +4,7 @@ import tensorflow as tf
 
 SEQ_POOL = 1
 
-class ConvBlock(tf.keras.Model):
+class ConvBlock(tf.keras.layers.Layer):
     """One block of Conv2D-BN-Dropout-MaxPool2D"""
 
     def __init__(self, num_filters, max_pool, l2_lambda):

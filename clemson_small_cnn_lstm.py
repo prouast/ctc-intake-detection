@@ -2,14 +2,15 @@
 
 import tensorflow as tf
 
+SEQ_POOL = 4
+
 class Model(tf.keras.Model):
     """CNN-LSTM for inertial data"""
 
-    def __init__(self, num_classes, seq_pool, l2_lambda):
+    def __init__(self, num_classes, input_length, l2_lambda):
         super(Model, self).__init__()
         # Make sure model implied seq_pool equals arg implied seq_pool
-        assert seq_pool == 4, \
-            "seq_pool: Model implied == 4 != {} == arg implied".format(seq_pool)
+        self.input_length = input_length
         self.conv1d_1 = tf.keras.layers.Conv1D(
             filters=128, kernel_size=1, padding='same',
             activation=tf.nn.relu,
@@ -55,3 +56,21 @@ class Model(tf.keras.Model):
         inputs = self.dense_1(inputs)
         inputs = self.dropout(inputs)
         return inputs
+
+    @tf.function
+    def labels(self, labels, batch_size=None):
+        """Slice labels corresponding to pooling layers in model"""
+        if batch_size is not None:
+            labels = tf.strided_slice(
+                input_=labels, begin=[0, SEQ_POOL-1], end=[batch_size, self.input_length],
+                strides=[1, SEQ_POOL])
+            labels = tf.reshape(labels, [batch_size, int(self.input_length/SEQ_POOL)])
+        else:
+            labels = tf.strided_slice(
+                input_=labels, begin=[SEQ_POOL-1], end=[self.input_length],
+                strides=[SEQ_POOL])
+            labels = tf.reshape(labels, [int(self.input_length/SEQ_POOL)])
+        return labels
+
+    def seq_length(self):
+        return int(self.input_length / SEQ_POOL)

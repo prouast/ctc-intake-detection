@@ -8,11 +8,11 @@ BATCH_NORM_EPSILON = 1e-5
 IMAGENET_SIZE = 224
 
 
-class conv2d_fixed_padding(tf.keras.Model):
+class Conv2DFixedPadding(tf.keras.layers.Layer):
     """Strided 2-d convolution with explicit padding"""
 
     def __init__(self, filters, kernel_size, strides):
-        super(conv2d_fixed_padding, self).__init__()
+        super(Conv2DFixedPadding, self).__init__()
         self.strides_one = strides == 1
         self.kernel_size = kernel_size
         self.conv2d = tf.keras.layers.Conv2D(
@@ -33,11 +33,11 @@ class conv2d_fixed_padding(tf.keras.Model):
         return inputs
 
 
-class block(tf.keras.Model):
+class Block(tf.keras.layers.Layer):
     """A single block for ResNet v2 with bottleneck"""
 
     def __init__(self, filters, projection_shortcut, strides):
-        super(block, self).__init__()
+        super(Block, self).__init__()
         self.batch_norm_1 = tf.keras.layers.BatchNormalization(
             momentum=BATCH_NORM_DECAY, epsilon=BATCH_NORM_EPSILON, center=True,
             scale=True, fused=True)
@@ -48,11 +48,11 @@ class block(tf.keras.Model):
             momentum=BATCH_NORM_DECAY, epsilon=BATCH_NORM_EPSILON, center=True,
             scale=True, fused=True)
         self.projection_shortcut = projection_shortcut
-        self.conv2d_1_fixed_padding = conv2d_fixed_padding(
+        self.conv2d_1_fixed_padding = Conv2DFixedPadding(
             filters=filters, kernel_size=1, strides=1)
-        self.conv2d_2_fixed_padding = conv2d_fixed_padding(
+        self.conv2d_2_fixed_padding = Conv2DFixedPadding(
             filters=filters, kernel_size=3, strides=strides)
-        self.conv2d_3_fixed_padding = conv2d_fixed_padding(
+        self.conv2d_3_fixed_padding = Conv2DFixedPadding(
             filters=4*filters, kernel_size=1, strides=1)
 
     @tf.function
@@ -72,20 +72,20 @@ class block(tf.keras.Model):
         return inputs + shortcut
 
 
-class block_layer(tf.keras.Model):
+class BlockLayer(tf.keras.layers.Layer):
     """One layer of blocks for a ResNet model"""
 
     def __init__(self, filters, blocks, strides, name):
-        super(block_layer, self).__init__()
+        super(BlockLayer, self).__init__()
         self.name_ = name
-        self.block = block(
-            filters=filters, projection_shortcut=conv2d_fixed_padding(
+        self.block = Block(
+            filters=filters, projection_shortcut=Conv2DFixedPadding(
                 filters=filters*4, kernel_size=1, strides=strides),
             strides=strides)
         self.blocks = []
         for i in range(blocks):
             self.blocks.append(
-                block(filters=filters, projection_shortcut=None, strides=1))
+                Block(filters=filters, projection_shortcut=None, strides=1))
 
     @tf.function
     def __call__(self, inputs):
@@ -107,7 +107,7 @@ class Model(tf.keras.Model):
         self.kernel_size = 7
         self.num_lstm = 128
         self.conv2d_fixed_padding = tf.keras.layers.TimeDistributed(
-            conv2d_fixed_padding(
+            Conv2DFixedPadding(
                 filters=self.num_filters, kernel_size=7, strides=2))
         self.pool2d = tf.keras.layers.TimeDistributed(
             tf.keras.layers.MaxPool2D(
@@ -118,7 +118,7 @@ class Model(tf.keras.Model):
             num_strides = self.block_strides[i]
             self.block_layers.append(
                 tf.keras.layers.TimeDistributed(
-                    block_layer(
+                    BlockLayer(
                         filters=num_filters, blocks=num_blocks,
                         strides=num_strides,
                         name='block_layer_{}'.format(i+1))))
