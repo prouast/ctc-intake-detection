@@ -18,6 +18,7 @@ import oreba_video_small_cnn_lstm
 import oreba_video_resnet_cnn_lstm
 import oreba_inert_small_cnn_lstm
 import oreba_inert_heyd_cnn_lstm
+import oreba_inert_residual_cnn_lstm
 import clemson_small_cnn_lstm
 
 # Representation
@@ -31,7 +32,7 @@ LR_BOUNDARIES = [5, 10, 15]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
 LR_DECAY_RATE = 0.85
 LR_DECAY_STEPS = 1
-NUM_SHUFFLE = 100000
+NUM_SHUFFLE = 1000
 
 LABEL_MODES = oreba_dis.NUM_EVENT_CLASSES_MAP.keys()
 
@@ -70,7 +71,7 @@ flags.DEFINE_enum(name='model',
     default='oreba_inert_small_cnn_lstm',
     enum_values=["oreba_video_small_cnn_lstm", "oreba_video_resnet_cnn_lstm",
         "oreba_inert_small_cnn_lstm", "oreba_inert_heyd_cnn_lstm",
-        "clemson_small_cnn_lstm"],
+        "oreba_inert_residual_cnn_lstm", "clemson_small_cnn_lstm"],
     help='Select the model')
 flags.DEFINE_string(name='model_ckpt',
     default='run', help='Model checkpoint for prediction (e.g., model_5000).')
@@ -124,6 +125,10 @@ def train_and_evaluate():
     elif FLAGS.model == "oreba_inert_heyd_cnn_lstm":
         assert FLAGS.dataset == 'oreba-dis', "Dataset and model don't match"
         model = oreba_inert_heyd_cnn_lstm.Model(num_classes=num_classes,
+            input_length=FLAGS.input_length, l2_lambda=L2_LAMBDA)
+    elif FLAGS.model == "oreba_inert_residual_cnn_lstm":
+        assert FLAGS.dataset == 'oreba-dis', "Dataset and model don't match"
+        model = oreba_inert_residual_cnn_lstm.Model(num_classes=num_classes,
             input_length=FLAGS.input_length, l2_lambda=L2_LAMBDA)
     elif FLAGS.model == "clemson_small_cnn_lstm":
         assert FLAGS.dataset == 'clemson', "Dataset and model don't match"
