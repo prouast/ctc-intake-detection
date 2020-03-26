@@ -38,7 +38,7 @@ class BottleneckResBlock(tf.keras.layers.Layer):
 
     def __init__(self, filters, shortcut, strides):
         super(Block, self).__init__()
-        self.shortcut shortcut
+        self.shortcut = shortcut
         self.conv_1 = Conv2DFixedPadding(
             filters=filters, kernel_size=1, strides=1)
         self.bn_1 = tf.keras.layers.BatchNormalization(
@@ -89,7 +89,7 @@ class BlockLayer(tf.keras.layers.Layer):
         self.block = BottleneckResBlock(
             filters=filters, shortcut=True, strides=strides)
         self.blocks = []
-        for i in range(blocks):
+        for i in range(blocks-1):
             self.blocks.append(
                 BottleneckResBlock(filters=filters, shortcut=False, strides=1))
 

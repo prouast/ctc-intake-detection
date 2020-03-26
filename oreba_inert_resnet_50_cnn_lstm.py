@@ -1,4 +1,4 @@
-"""Residual CNN-LSTM Model for OREBA-DIS dataset"""
+"""1D ResNet-50 CNN-LSTM Model for OREBA-DIS dataset"""
 
 import tensorflow as tf
 
@@ -28,43 +28,6 @@ class Conv1DFixedPadding(tf.keras.layers.Layer):
             inputs = tf.pad(tensor=inputs,
                 paddings=[[0, 0], [pad_beg, pad_end], [0, 0]])
         inputs = self.conv1d(inputs)
-        return inputs
-
-
-class ResBlock(tf.keras.layers.Layer):
-    """One residual block"""
-
-    def __init__(self, num_filters, kernel_size, shortcut, strides):
-        super(ResBlock, self).__init__()
-        self.shortcut = shortcut
-        self.conv_1 = Conv1DFixedPadding(filters=num_filters,
-            kernel_size=kernel_size, strides=strides)
-        self.bn_1 = tf.keras.layers.BatchNormalization(
-            momentum=BATCH_NORM_DECAY)
-        self.conv_2 = Conv1DFixedPadding(filters=num_filters,
-            kernel_size=kernel_size, strides=1)
-        self.bn_2 = tf.keras.layers.BatchNormalization(
-            momentum=BATCH_NORM_DECAY)
-        if self.shortcut:
-            self.conv_sc = Conv1DFixedPadding(filters=num_filters,
-                kernel_size=1, strides=strides)
-            self.bn_sc = tf.keras.layers.BatchNormalization(
-                momentum=BATCH_NORM_DECAY)
-        self.relu = tf.keras.layers.ReLU()
-
-    @tf.function
-    def __call__(self, inputs, training=None):
-        shortcut = inputs
-        if self.shortcut:
-            shortcut = self.conv_sc(shortcut)
-            shortcut = self.bn_sc(shortcut, training=training)
-        inputs = self.conv_1(inputs)
-        inputs = self.bn_1(inputs, training=training)
-        inputs = self.relu(inputs)
-        inputs = self.conv_2(inputs)
-        inputs = self.bn_2(inputs, training=training)
-        inputs = tf.keras.layers.add([inputs, shortcut])
-        inputs = self.relu(inputs)
         return inputs
 
 
@@ -121,7 +84,7 @@ class BlockLayer(tf.keras.layers.Layer):
             num_filters=num_filters, kernel_size=kernel_size, shortcut=True,
             strides=strides)
         self.blocks = []
-        for i in range(num_blocks):
+        for i in range(num_blocks-1):
             self.blocks.append(
                 BottleneckResBlock(
                     num_filters=num_filters, kernel_size=kernel_size,
