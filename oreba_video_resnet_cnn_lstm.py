@@ -33,12 +33,12 @@ class Conv2DFixedPadding(tf.keras.layers.Layer):
         return inputs
 
 
-class Block(tf.keras.layers.Layer):
+class BottleneckResBlock(tf.keras.layers.Layer):
     """A single block for ResNet v2 with bottleneck"""
 
-    def __init__(self, filters, strides):
+    def __init__(self, filters, shortcut, strides):
         super(Block, self).__init__()
-        self.sc = (strides > 1)
+        self.shortcut shortcut
         self.conv_1 = Conv2DFixedPadding(
             filters=filters, kernel_size=1, strides=1)
         self.bn_1 = tf.keras.layers.BatchNormalization(
@@ -54,7 +54,7 @@ class Block(tf.keras.layers.Layer):
         self.bn_3 = tf.keras.layers.BatchNormalization(
             momentum=BATCH_NORM_DECAY, epsilon=BATCH_NORM_EPSILON,
             center=True, scale=True, fused=True)
-        if self.sc:
+        if self.shortcut:
             self.conv_sc = Conv2DFixedPadding(
                 filters=4*filters, kernel_size=1, strides=strides)
             self.bn_sc = tf.keras.layers.BatchNormalization(
@@ -64,7 +64,7 @@ class Block(tf.keras.layers.Layer):
     @tf.function
     def __call__(self, inputs):
         shortcut = inputs
-        if self.sc:
+        if self.shortcut:
             shortcut = self.conv_sc(inputs)
             shortcut = self.bn_sc(inputs)
         inputs = self.conv_1(inputs)
@@ -86,12 +86,12 @@ class BlockLayer(tf.keras.layers.Layer):
     def __init__(self, filters, blocks, strides, name):
         super(BlockLayer, self).__init__()
         self.name_ = name
-        self.block = Block(
-            filters=filters, strides=strides)
+        self.block = BottleneckResBlock(
+            filters=filters, shortcut=True, strides=strides)
         self.blocks = []
         for i in range(blocks):
             self.blocks.append(
-                Block(filters=filters, strides=1))
+                BottleneckResBlock(filters=filters, shortcut=False, strides=1))
 
     @tf.function
     def __call__(self, inputs):
