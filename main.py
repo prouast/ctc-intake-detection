@@ -28,7 +28,7 @@ DEF_VAL = 0
 PAD_VAL = -1
 
 # Hyperparameters
-L2_LAMBDA = 1e-3
+L2_LAMBDA = 1e-4
 LR_BOUNDARIES = [5, 10, 15]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
 LR_DECAY_RATE = 0.85
@@ -91,57 +91,62 @@ flags.DEFINE_integer(name='train_epochs',
 
 logging.set_verbosity(logging.INFO)
 
+def _get_dataset(dataset, label_mode, input_mode, input_length, seq_shift):
+    """Get the dataset"""
+    if dataset == 'oreba-dis':
+        dataset = oreba_dis.Dataset(label_mode, input_mode, input_length,
+            seq_shift)
+    elif dataset == 'fic':
+        dataset = fic.Dataset(label_mode, input_length, seq_shift)
+    elif dataset == 'clemson':
+        dataset = clemson.Dataset(label_mode, input_length, seq_shift)
+    else:
+        raise ValueError("Dataset {} not implemented!".format(FLAGS.dataset))
+
+    return dataset
+
+def _get_model(model, num_classes, input_length, l2_lambda):
+    """Get the model"""
+    if model == "oreba_video_small_cnn_lstm":
+        model = oreba_video_small_cnn_lstm.Model(num_classes=num_classes,
+            input_length=input_length, l2_lambda=L2_LAMBDA)
+    elif model == "oreba_video_resnet_cnn_lstm":
+        model = oreba_video_resnet_cnn_lstm.Model(num_classes=num_classes,
+            input_length=input_length, l2_lambda=L2_LAMBDA)
+    elif model == "oreba_inert_small_cnn_lstm":
+        model = oreba_inert_small_cnn_lstm.Model(num_classes=num_classes,
+            input_length=input_length, l2_lambda=L2_LAMBDA)
+    elif model == "oreba_inert_heyd_cnn_lstm":
+        model = oreba_inert_heyd_cnn_lstm.Model(num_classes=num_classes,
+            input_length=input_length, l2_lambda=L2_LAMBDA)
+    elif model == "oreba_inert_resnet_18_cnn_lstm":
+        model = oreba_inert_resnet_18_cnn_lstm.Model(num_classes=num_classes,
+            input_length=input_length, l2_lambda=L2_LAMBDA)
+    elif model == "oreba_inert_resnet_50_cnn_lstm":
+        model = oreba_inert_resnet_50_cnn_lstm.Model(num_classes=num_classes,
+            input_length=input_length, l2_lambda=L2_LAMBDA)
+    elif model == "clemson_small_cnn_lstm":
+        model = clemson_small_cnn_lstm.Model(num_classes=num_classes,
+            input_length=input_length, l2_lambda=L2_LAMBDA)
+    else:
+        raise ValueError("Model {} not implemented!".format(model))
+    return model
+
 def train_and_evaluate():
     """Run the experiment."""
 
     # Get dataset
-    if FLAGS.dataset == 'oreba-dis':
-        dataset = oreba_dis.Dataset(FLAGS.label_mode, FLAGS.input_mode,
-            FLAGS.input_length, FLAGS.seq_shift)
-    elif FLAGS.dataset == 'fic':
-        dataset = fic.Dataset(FLAGS.label_mode, FLAGS.input_length,
-            FLAGS.seq_shift)
-    elif FLAGS.dataset == 'clemson':
-        dataset = clemson.Dataset(FLAGS.label_mode, FLAGS.input_length,
-            FLAGS.seq_shift)
-    else:
-        raise ValueError("Dataset {} not implemented!".format(FLAGS.dataset))
+    dataset = _get_dataset(dataset=FLAGS.dataset, label_mode=FLAGS.label_mode,
+        input_mode=FLAGS.input_mode, input_length=FLAGS.input_length,
+        seq_shift=FLAGS.seq_shift)
 
     # Read the representation choice
     num_event_classes = dataset.num_classes()
     num_classes = num_event_classes + 1
 
     # Read the model choice
-    if FLAGS.model == "oreba_video_small_cnn_lstm":
-        assert FLAGS.dataset == 'oreba-dis', "Dataset and model don't match"
-        model = oreba_video_small_cnn_lstm.Model(num_classes=num_classes,
-            input_length=FLAGS.input_length, l2_lambda=L2_LAMBDA)
-    elif FLAGS.model == "oreba_video_resnet_cnn_lstm":
-        assert FLAGS.dataset == 'oreba-dis', "Dataset and model don't match"
-        model = oreba_video_resnet_cnn_lstm.Model(num_classes=num_classes,
-            input_length=FLAGS.input_length, l2_lambda=L2_LAMBDA)
-    elif FLAGS.model == "oreba_inert_small_cnn_lstm":
-        assert FLAGS.dataset == 'oreba-dis', "Dataset and model don't match"
-        model = oreba_inert_small_cnn_lstm.Model(num_classes=num_classes,
-            input_length=FLAGS.input_length, l2_lambda=L2_LAMBDA)
-    elif FLAGS.model == "oreba_inert_heyd_cnn_lstm":
-        assert FLAGS.dataset == 'oreba-dis', "Dataset and model don't match"
-        model = oreba_inert_heyd_cnn_lstm.Model(num_classes=num_classes,
-            input_length=FLAGS.input_length, l2_lambda=L2_LAMBDA)
-    elif FLAGS.model == "oreba_inert_resnet_18_cnn_lstm":
-        assert FLAGS.dataset == 'oreba-dis', "Dataset and model don't match"
-        model = oreba_inert_resnet_18_cnn_lstm.Model(num_classes=num_classes,
-            input_length=FLAGS.input_length, l2_lambda=L2_LAMBDA)
-    elif FLAGS.model == "oreba_inert_resnet_50_cnn_lstm":
-        assert FLAGS.dataset == 'oreba-dis', "Dataset and model don't match"
-        model = oreba_inert_resnet_50_cnn_lstm.Model(num_classes=num_classes,
-            input_length=FLAGS.input_length, l2_lambda=L2_LAMBDA)
-    elif FLAGS.model == "clemson_small_cnn_lstm":
-        assert FLAGS.dataset == 'clemson', "Dataset and model don't match"
-        model = clemson_small_cnn_lstm.Model(num_classes=num_classes,
-            input_length=FLAGS.input_length, l2_lambda=L2_LAMBDA)
-    else:
-        raise ValueError("Model {} not implemented!".format(FLAGS.model))
+    model = _get_model(model=FLAGS.model, num_classes=num_classes,
+        input_length=FLAGS.input_length, l2_lambda=L2_LAMBDA)
 
     # Get the seq_length
     seq_length = model.seq_length()
@@ -155,7 +160,7 @@ def train_and_evaluate():
         values = np.divide(FLAGS.lr_base, LR_VALUE_DIV)
         lr_schedule = keras.optimizers.schedules.PiecewiseConstantDecay(
             boundaries=LR_BOUNDARIES, values=values.tolist())
-    optimizer = Adam(learning_rate=lr_schedule)
+    optimizer = Adam(learning_rate=lr_schedule, clipnorm=10.0)
 
     # Get train and eval dataset
     train_dataset = dataset(batch_size=FLAGS.batch_size, is_training=True,
@@ -225,7 +230,10 @@ def train_and_evaluate():
                     loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
                     seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL,
                     blank_index=BLANK_INDEX)
-                grads = tape.gradient(train_loss, model.trainable_weights)
+                # l2 regularization loss
+                l2_loss = sum(model.losses)
+                # Gradients
+                grads = tape.gradient(train_loss+l2_loss, model.trainable_weights)
             # Apply the gradients
             optimizer.apply_gradients(zip(grads, model.trainable_weights))
 
@@ -255,7 +263,11 @@ def train_and_evaluate():
                 logging.info('Mean training f1 (this step): {}'.format(float(train_metrics['mean_f1'].result())))
                 # TensorBoard
                 with train_writer.as_default():
+                    tf.summary.scalar("training/global_gradient_norm",
+                        data=tf.linalg.global_norm(grads), step=global_step)
                     tf.summary.scalar('training/loss', data=train_loss, step=global_step)
+                    tf.summary.scalar('training/l2_loss', data=l2_loss, step=global_step)
+                    tf.summary.scalar('training/total_loss', data=train_loss+l2_loss, step=global_step)
                     tf.summary.scalar('training/learning_rate', data=lr_schedule(epoch), step=global_step)
                     tf.summary.scalar('metrics/mean_precision', data=train_metrics['mean_precision'].result(), step=global_step)
                     tf.summary.scalar('metrics/mean_recall', data=train_metrics['mean_recall'].result(), step=global_step)
@@ -387,22 +399,18 @@ def train_and_evaluate():
 def predict():
     assert FLAGS.batch_size == 1, "batch_size should be 1 for prediction"
     # Get dataset
-    if FLAGS.dataset == 'oreba-dis':
-        dataset = oreba_dis.Dataset(FLAGS.label_mode, FLAGS.input_mode,
-            FLAGS.input_length, FLAGS.seq_shift)
-    else:
-        raise ValueError("Dataset {} not implemented!".format(FLAGS.dataset))
+    dataset = _get_dataset(dataset=FLAGS.dataset, label_mode=FLAGS.label_mode,
+        input_mode=FLAGS.input_mode, input_length=FLAGS.input_length,
+        seq_shift=FLAGS.seq_shift)
     # Get the model
     num_event_classes = dataset.num_classes()
     num_classes = num_event_classes + 1
-    if FLAGS.model == "video_small_cnn_lstm":
-        model = video_small_cnn_lstm.Model(FLAGS.input_length, num_classes, L2_LAMBDA)
-    elif FLAGS.model == "inert_small_cnn_lstm":
-        model = inert_small_cnn_lstm.Model(num_classes, L2_LAMBDA)
-    elif FLAGS.model == "inert_heydarian_cnn_lstm":
-        model = inert_heydarian_cnn_lstm.Model(num_classes, L2_LAMBDA)
-    else:
-        raise ValueError("Model {} not implemented!".format(FLAGS.model))
+    # Read the model choice
+    model = _get_model(model=FLAGS.model, num_classes=num_classes,
+        input_length=FLAGS.input_length, l2_lambda=L2_LAMBDA)
+    # Make sure that seq_shift is set corresponding to model SEQ_POOL
+    assert FLAGS.seq_shift == model.seq_pool(), \
+        "seq_shift should be equal to model.seq_pool() in predict"
     # Get the seq length
     seq_length = model.seq_length()
     # Load weights
