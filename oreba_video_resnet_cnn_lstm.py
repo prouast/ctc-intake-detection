@@ -172,3 +172,6 @@ class Model(tf.keras.Model):
 
     def seq_length(self):
         return self.input_length
+
+    def seq_pool(self):
+        return SEQ_POOL

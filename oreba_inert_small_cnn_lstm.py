@@ -2,27 +2,27 @@
 
 import tensorflow as tf
 
-SEQ_POOL = 8
+SEQ_POOL = 16
+
 
 class ConvBlock(tf.keras.layers.Layer):
     """One block of Conv1D-BN-Dropout-MaxPool1D"""
 
-    def __init__(self, num_filters, max_pool, l2_lambda):
+    def __init__(self, num_filters, kernel_size, max_pool, l2_lambda):
         super(ConvBlock, self).__init__()
         self.max_pool = max_pool
         self.conv = tf.keras.layers.Conv1D(
-            filters=num_filters, kernel_size=5, padding='same',
-            activation=tf.nn.relu,
+            filters=num_filters, kernel_size=kernel_size, padding='same',
             kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
-        self.bn = tf.keras.layers.BatchNormalization(momentum=0.9)
+        self.relu = tf.keras.layers.ReLU()
         self.dropout = tf.keras.layers.Dropout(rate=0.5)
         if max_pool:
             self.max_pool = tf.keras.layers.MaxPool1D(pool_size=2, strides=2)
 
     @tf.function
-    def __call__(self, inputs, training=False):
+    def __call__(self, inputs, training):
         inputs = self.conv(inputs)
-        inputs = self.bn(inputs)
+        inputs = self.relu(inputs)
         inputs = self.dropout(inputs)
         if self.max_pool:
             inputs = self.max_pool(inputs)
@@ -34,11 +34,15 @@ class Model(tf.keras.Model):
     def __init__(self, num_classes, input_length, l2_lambda):
         super(Model, self).__init__()
         self.input_length = input_length
-        self.num_conv = [64, 128, 256]
-        self.num_lstm = [64, 128]
+        self.num_conv = [(128, 3, True), (128, 3, False),
+                         (128, 3, True), (128, 3, False),
+                         (256, 5, True), (256, 5, False),
+                         (256, 5, True), (256, 5, False)]
+        self.num_lstm = [128]
         self.conv_blocks = []
-        for i, num_filters in enumerate(self.num_conv):
-            self.conv_blocks.append(ConvBlock(num_filters, True, l2_lambda))
+        for i, (num_filters, kernel_size, max_pool) in enumerate(self.num_conv):
+            self.conv_blocks.append(ConvBlock(num_filters=num_filters,
+                kernel_size=kernel_size, max_pool=max_pool, l2_lambda=l2_lambda))
         self.lstm_blocks = []
         for i, num_units in enumerate(self.num_lstm):
             self.lstm_blocks.append(tf.keras.layers.LSTM(
@@ -50,9 +54,9 @@ class Model(tf.keras.Model):
         self.dropout = tf.keras.layers.Dropout(rate=0.5)
 
     @tf.function
-    def __call__(self, inputs, training=False):
+    def __call__(self, inputs, training):
         for conv_block in self.conv_blocks:
-            inputs = conv_block(inputs)
+            inputs = conv_block(inputs, training=training)
         for lstm_block in self.lstm_blocks:
             inputs = lstm_block(inputs)
         inputs = self.dense(inputs)
@@ -76,3 +80,6 @@ class Model(tf.keras.Model):
 
     def seq_length(self):
         return int(self.input_length / SEQ_POOL)
+
+    def seq_pool(self):
+        return SEQ_POOL

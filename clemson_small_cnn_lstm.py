@@ -74,3 +74,6 @@ class Model(tf.keras.Model):
 
     def seq_length(self):
         return int(self.input_length / SEQ_POOL)
+
+    def seq_pool(self):
+        return SEQ_POOL
