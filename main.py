@@ -31,9 +31,9 @@ PAD_VAL = -1
 L2_LAMBDA = 1e-4
 LR_BOUNDARIES = [5, 10, 15]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
-LR_DECAY_RATE = 0.85
+LR_DECAY_RATE = 0.8
 LR_DECAY_STEPS = 1
-NUM_SHUFFLE = 250000
+NUM_SHUFFLE = 500000
 
 LABEL_MODES = oreba_dis.NUM_EVENT_CLASSES_MAP.keys()
 
@@ -76,7 +76,7 @@ flags.DEFINE_enum(name='model',
         "clemson_small_cnn_lstm"],
     help='Select the model')
 flags.DEFINE_string(name='model_ckpt',
-    default='run', help='Model checkpoint for prediction (e.g., model_5000).')
+    default=None, help='Model checkpoint for prediction (e.g., model_5000).')
 flags.DEFINE_string(name='model_dir',
     default='run', help='Output directory for model and training stats.')
 flags.DEFINE_enum(name='predict_mode',
@@ -87,7 +87,7 @@ flags.DEFINE_integer(name='seq_shift',
 flags.DEFINE_string(name='train_dir',
     default='data/inert/train', help='Directory for training data.')
 flags.DEFINE_integer(name='train_epochs',
-    default=200, help='Number of training epochs.')
+    default=30, help='Number of training epochs.')
 
 logging.set_verbosity(logging.INFO)
 
@@ -147,6 +147,11 @@ def train_and_evaluate():
     # Read the model choice
     model = _get_model(model=FLAGS.model, num_classes=num_classes,
         input_length=FLAGS.input_length, l2_lambda=L2_LAMBDA)
+
+    # Load weights
+    if FLAGS.model_ckpt is not None:
+        logging.info("Loading from {}".format(FLAGS.model_ckpt))
+        model.load_weights(os.path.join(FLAGS.model_dir, "checkpoints", FLAGS.model_ckpt))
 
     # Get the seq_length
     seq_length = model.seq_length()
@@ -229,7 +234,7 @@ def train_and_evaluate():
                 train_loss = loss(train_labels, train_logits,
                     loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
                     seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL,
-                    blank_index=BLANK_INDEX)
+                    blank_index=BLANK_INDEX, training=True)
                 # l2 regularization loss
                 l2_loss = sum(model.losses)
                 # Gradients
@@ -319,7 +324,7 @@ def train_and_evaluate():
                             loss_mode=FLAGS.loss_mode,
                             batch_size=FLAGS.batch_size, seq_length=seq_length,
                             def_val=DEF_VAL, pad_val=PAD_VAL,
-                            blank_index=BLANK_INDEX)
+                            blank_index=BLANK_INDEX, training=False)
                     eval_losses.append(eval_loss.numpy())
 
                     # Decode logits into predictions

@@ -184,15 +184,16 @@ def _compute_balanced_sample_weight(labels):
 ##### Loss functions
 
 @tf.function
-def _loss_ctc(labels, logits, batch_size, seq_length, def_val, pad_val, blank_index, pos='middle'):
+def _loss_ctc(labels, logits, batch_size, seq_length, def_val, pad_val, blank_index, training, pos='middle'):
     """CTC loss
     - Loss: CTC loss (preprocess_collapse_repeated=False, ctc_merge_repeated=True)
     - Representation: Keep {event_val} only, no default values
     - Collapse: Collapse event_val before loss (pad ends) {e.g., 12-1-1-1}
     # index 0 is blank label
     """
-    # Calculate sample weights to account for dataset imbalance
-    sample_weights = _compute_balanced_sample_weight(labels)
+    if training:
+        # Calculate sample weights to account for dataset imbalance
+        sample_weights = _compute_balanced_sample_weight(labels)
     # Collapse repeated events in labels, remove all def_val
     labels, label_lengths = _collapse_sequences(labels, seq_length,
         def_val=def_val, pad_val=pad_val, mode='remove_def', pos=pos)
@@ -204,9 +205,10 @@ def _loss_ctc(labels, logits, batch_size, seq_length, def_val, pad_val, blank_in
         logit_length=logit_lengths,
         logits_time_major=False,
         blank_index=blank_index)
-    # Multiply loss by sample weights
-    sample_weights = tf.reduce_mean(sample_weights, axis=1)
-    loss = sample_weights * loss
+    if training:
+        # Multiply loss by sample weights
+        sample_weights = tf.reduce_mean(sample_weights, axis=1)
+        loss = sample_weights * loss
     # Reduce loss to scalar
     return tf.reduce_mean(loss)
 
@@ -245,12 +247,12 @@ def _loss_crossent(labels, logits):
         weights=weights)
     return loss
 
-def loss(labels, logits, loss_mode, batch_size, seq_length, def_val, pad_val, blank_index, pos='middle'):
+def loss(labels, logits, loss_mode, batch_size, seq_length, def_val, pad_val, blank_index, training, pos='middle'):
     """Return loss corresponding to loss_mode"""
     if loss_mode == 'ctc':
         return _loss_ctc(labels, logits, batch_size=batch_size,
             seq_length=seq_length, def_val=def_val, pad_val=pad_val,
-            blank_index=blank_index)
+            blank_index=blank_index, training=training)
     elif loss_mode == 'naive':
         return _loss_naive(labels, logits, batch_size=batch_size,
             seq_length=seq_length)
