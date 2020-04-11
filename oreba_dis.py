@@ -13,8 +13,9 @@ ORIGINAL_SIZE = 140
 FRAME_SIZE = 128
 NUM_CHANNELS = 3
 NUM_EVENT_CLASSES_MAP = {"label_1": 1, "label_2": 2, "label_3": 3, "label_4": 6}
-FLIP_ACC = [1., -1., 1.]
-FLIP_GYRO = [-1., 1., -1.]
+FLIP_ACC = [-1., 1., 1.]
+FLIP_GYRO = [1., -1., -1.]
+FLIP_ORIENT = [-1., -1., 1.]
 
 logging.set_verbosity(logging.INFO)
 
@@ -164,14 +165,60 @@ class Dataset():
 
             if is_training:
                 # Random horizontal flip
-                def _flip_inertial(inert_data):
+                def _flip_hands(inert_data):
                     """Flip hands"""
-                    mult = tf.tile(tf.concat([FLIP_ACC, FLIP_GYRO], axis=0), [2])
+                    # Derive multiplier
+                    flip = tf.concat([FLIP_ACC, FLIP_GYRO], axis=0)
+                    orient = tf.concat([FLIP_ORIENT, FLIP_ORIENT], axis=0)
+                    mult = tf.tile(tf.math.multiply(flip, orient), [2])
+                    # Transform values
                     inert_data = tf.math.multiply(inert_data, mult)
-                    return tf.concat([inert_data[:, 6:12], inert_data[:, 0:6]], axis=1)
+                    # Change indices
+                    inert_data = tf.concat([inert_data[:, 6:12], inert_data[:, 0:6]], axis=1)
+                    return inert_data
                 condition = tf.less(tf.random.uniform([], 0, 1.0), .5)
                 inert_data = tf.cond(pred=condition,
-                    true_fn=lambda: _flip_inertial(inert_data),
+                    true_fn=lambda: _flip_hands(inert_data),
+                    false_fn=lambda: inert_data)
+                # Random x-z rotation
+                def _random_rotation(inert_data, rotation_degree):
+                    """Rotate around y axis"""
+                    # Derive multiplication matrix
+                    mult_0 = (90.0-rotation_degree)/90.0
+                    mult_1 = 1.0-mult_0
+                    mult = tf.concat(
+                        [[mult_0, 0.0, mult_1, 0.0,    0.0, 0.0],
+                         [0.0,    1.0, 0.0,    0.0,    0.0, 0.0],
+                         [mult_1, 0.0, mult_0, 0.0,    0.0, 0.0],
+                         [0.0,    0.0, 0.0,    mult_0, 0.0, mult_1],
+                         [0.0,    0.0, 0.0,    0.0,    1.0, 0.0],
+                         [0.0,    0.0, 0.0,    mult_1, 0.0, mult_0]], axis=0)
+                    mult = tf.reshape(mult, [6, 6])
+                    # Rotation
+                    inert_data_left = tf.linalg.matmul(inert_data[:, 0:6], mult)
+                    inert_data_right = tf.linalg.matmul(inert_data[:, 6:12], mult)
+                    inert_data = tf.concat([inert_data_left, inert_data_right], axis=1)
+                    return inert_data
+                rotation_degree = tf.math.abs(
+                    tf.random.normal([], mean=0.0, stddev=10.0))
+                inert_data = _random_rotation(inert_data, rotation_degree)
+                # Random orientation change
+                def _change_orientation(inert_data, change_left, change_right):
+                    """Change orientation"""
+                    # Derive multiplier
+                    left_orient = FLIP_ORIENT if change_left else [1.0, 1.0, 1.0]
+                    right_orient = FLIP_ORIENT if change_right else [1.0, 1.0, 1.0]
+                    mult = tf.tile(tf.concat([left_orient, right_orient], axis=0), [2])
+                    # Transform values
+                    inert_data = tf.math.multiply(inert_data, mult)
+                    return inert_data
+                change_left = tf.less(tf.random.uniform([], 0, 1.0), .5)
+                inert_data = tf.cond(pred=condition,
+                    true_fn=lambda: _change_orientation(inert_data, True, False),
+                    false_fn=lambda: inert_data)
+                change_right = tf.less(tf.random.uniform([], 0, 1.0), .5)
+                inert_data = tf.cond(pred=condition,
+                    true_fn=lambda: _change_orientation(inert_data, False, True),
                     false_fn=lambda: inert_data)
 
             return inert_data, label_data
@@ -209,7 +256,8 @@ class Dataset():
             .apply(self.__get_sequence_batch_fn(is_training, is_predicting))
             .map(map_func=self.__get_transformation_parser(is_training),
                 num_parallel_calls=AUTOTUNE))
-        dataset = files.interleave(pipeline, cycle_length=4)
+        dataset = files.interleave(pipeline, cycle_length=4,
+            num_parallel_calls=AUTOTUNE)
         if is_training:
             dataset = dataset.shuffle(num_shuffle)
         dataset = dataset.batch(batch_size, drop_remainder=True)
