@@ -223,7 +223,7 @@ def _compute_balanced_sequence_weight(labels, seq_length, def_val, pad_val, pos)
             tf.cast(label_count, tf.float64))
     def calc_weight_with_pad(x):
         return tf.cond(pred=tf.equal(x, pad_index),
-                       true_fn=lambda: 1.0,
+                       true_fn=lambda: tf.constant(1.0, tf.float64),
                        false_fn=lambda: calc_weight_no_pad(x))
     def calc_weight(x):
         return tf.cond(pred=pred,
@@ -240,7 +240,7 @@ def _compute_balanced_sequence_weight(labels, seq_length, def_val, pad_val, pos)
 
 ##### Loss functions
 
-#@tf.function
+@tf.function
 def _loss_ctc(labels, logits, batch_size, seq_length, def_val, pad_val, blank_index, training, use_def, pos='middle'):
     """CTC loss
     - Loss: CTC loss (preprocess_collapse_repeated=False, ctc_merge_repeated=True)
