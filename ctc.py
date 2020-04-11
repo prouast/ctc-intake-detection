@@ -199,22 +199,48 @@ def _dense_to_sparse(input, eos_token=-1):
     sparse = tf.SparseTensor(idx, values, shape)
     return sparse
 
-def _compute_balanced_sample_weight(labels):
-        """Calculate the balanced sample weight for imbalanced data."""
-        f_labels = tf.reshape(labels,[-1]) if labels.get_shape().ndims == 2 else labels
-        y, idx, count = tf.unique_with_counts(f_labels)
-        total_count = tf.size(f_labels)
-        label_count = tf.size(y)
-        calc_weight = lambda x: tf.divide(tf.divide(total_count, x),
+def _compute_balanced_sequence_weight(labels, seq_length, def_val, pad_val, pos):
+    # Collapse events and default events
+    c_labels, _ = _collapse_sequences(labels, seq_length,
+        def_val=def_val, pad_val=pad_val,
+        mode='collapse_all_remove_collapsed', pos=pos)
+    f_labels = tf.reshape(c_labels,[-1])
+    # Classes, idx, and counts
+    y, idx, count = tf.unique_with_counts(f_labels)
+    # Predicate that indicates whether pad_val are present
+    pred = tf.reduce_any(tf.equal(f_labels, pad_val))
+    # Number of present pad_val
+    pad_count = tf.reduce_sum(tf.cast(tf.equal(f_labels, pad_val), tf.int32))
+    # Total count excluding pad_val
+    total_count = tf.size(f_labels) - pad_count
+    # Label count excluding pad_val
+    label_count = tf.cond(pred=pred,
+        true_fn=lambda: tf.size(y) - 1, false_fn=lambda: tf.size(y))
+    # Calculate weights for labels, set weight for pad_val to 1.0
+    pad_index = tf.argmax(tf.cast(tf.equal(y, pad_val), tf.int32), output_type=tf.int32)
+    def calc_weight_no_pad(x):
+        return tf.divide(tf.divide(total_count, count[x]),
             tf.cast(label_count, tf.float64))
-        class_weights = tf.map_fn(fn=calc_weight, elems=count, dtype=tf.float64)
-        sample_weights = tf.gather(class_weights, idx)
-        sample_weights = tf.reshape(sample_weights, tf.shape(labels))
-        return tf.cast(sample_weights, tf.float32)
+    def calc_weight_with_pad(x):
+        return tf.cond(pred=tf.equal(x, pad_index),
+                       true_fn=lambda: 1.0,
+                       false_fn=lambda: calc_weight_no_pad(x))
+    def calc_weight(x):
+        return tf.cond(pred=pred,
+                       true_fn=lambda: calc_weight_with_pad(x),
+                       false_fn=lambda: calc_weight_no_pad(x))
+    elems = tf.range(0, label_count+1, 1, tf.int32)
+    class_weights = tf.map_fn(fn=calc_weight, elems=elems, dtype=tf.float64)
+    # Gather sample weights in original tensor structure
+    sample_weights = tf.gather(class_weights, idx)
+    sample_weights = tf.reshape(sample_weights, tf.shape(c_labels))
+    # Collect weights on sequence level
+    sample_weights = tf.reduce_mean(sample_weights, axis=1)
+    return tf.cast(sample_weights, tf.float32)
 
 ##### Loss functions
 
-@tf.function
+#@tf.function
 def _loss_ctc(labels, logits, batch_size, seq_length, def_val, pad_val, blank_index, training, use_def, pos='middle'):
     """CTC loss
     - Loss: CTC loss (preprocess_collapse_repeated=False, ctc_merge_repeated=True)
@@ -227,10 +253,10 @@ def _loss_ctc(labels, logits, batch_size, seq_length, def_val, pad_val, blank_in
         - Collapse: Collapse event_val before loss (pad ends) {e.g., 12-1-1-1}
     # index 0 is blank label
     """
-    #if training:
-    #    # Calculate sample weights to account for dataset imbalance
-    #    sample_weights = _compute_balanced_sample_weight(labels)
-    # Collapse repeated events in labels, mode depends on use_def
+    if training:
+        # Compute sequence weights to account for dataset imbalance
+        sequence_weights = _compute_balanced_sequence_weight(
+            labels, seq_length, def_val, pad_val, pos)
     if use_def:
         labels, label_lengths = _collapse_sequences(labels, seq_length,
             def_val=def_val, pad_val=pad_val,
@@ -249,10 +275,9 @@ def _loss_ctc(labels, logits, batch_size, seq_length, def_val, pad_val, blank_in
         logit_length=logit_lengths,
         logits_time_major=False,
         blank_index=blank_index)
-    #if training:
-    #    # Multiply loss by sample weights
-    #    sample_weights = tf.reduce_mean(sample_weights, axis=1)
-    #    loss = sample_weights * loss
+    if training:
+        # Multiply loss by sequence weights
+        loss = sequence_weights * loss
     # Reduce loss to scalar
     return tf.reduce_mean(loss)
 
