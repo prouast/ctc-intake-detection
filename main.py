@@ -35,7 +35,7 @@ LR_BOUNDARIES = [5, 10, 15]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
 LR_DECAY_RATE = 0.7
 LR_DECAY_STEPS = 1
-NUM_SHUFFLE = 5000
+NUM_SHUFFLE = 500000
 
 LABEL_MODES = oreba_dis.EVENT_NAMES_MAP.keys()
 
@@ -186,8 +186,9 @@ def train_and_evaluate():
         'mean_precision': keras.metrics.Mean(),
         'mean_recall': keras.metrics.Mean(),
         'mean_f1': keras.metrics.Mean()}
-    for i in range(1, num_event_classes + 1):
-        other_vals = [j for j in range(1, num_event_classes + 1) if j != i]
+    event_classes = range(DEF_VAL + 1, DEF_VAL + num_event_classes + 1)
+    for i in event_classes:
+        other_vals = [j for j in event_classes if j != i]
         train_metrics['class_{}_precision'.format(i)] = metrics.Precision(
             event_val=i, def_val=DEF_VAL, seq_length=seq_length,
             other_vals=other_vals)
@@ -257,7 +258,7 @@ def train_and_evaluate():
             # Log every FLAGS.log_steps steps.
             if global_step % FLAGS.log_steps == 0:
                 # Update metrics
-                for i in range(1, num_event_classes + 1):
+                for i in event_classes:
                     train_metrics['class_{}_precision'.format(i)](train_labels, train_predictions_u)
                     train_metrics['class_{}_recall'.format(i)](train_labels, train_predictions_u)
                     train_metrics['class_{}_f1'.format(i)](train_labels, train_predictions_u)
@@ -287,7 +288,7 @@ def train_and_evaluate():
                 train_metrics['mean_recall'].reset_states()
                 train_metrics['mean_f1'].reset_states()
                 # For each class
-                for i in range(1, num_event_classes + 1):
+                for i in event_classes:
                     # Get metrics
                     train_pre = train_metrics['class_{}_precision'.format(i)].result()
                     train_rec = train_metrics['class_{}_recall'.format(i)].result()
@@ -340,13 +341,13 @@ def train_and_evaluate():
                         seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL)
 
                     # Update metric
-                    for i in range(1, num_event_classes + 1):
+                    for i in event_classes:
                         eval_metrics['class_{}_tp_fp1_fp2_fp3_fn'.format(i)](eval_labels, eval_predictions_u)
                         eval_metrics['class_{}_precision'.format(i)](eval_labels, eval_predictions_u)
                         eval_metrics['class_{}_recall'.format(i)](eval_labels, eval_predictions_u)
                         eval_metrics['class_{}_f1'.format(i)](eval_labels, eval_predictions_u)
 
-                for i in range(1, num_event_classes + 1):
+                for i in event_classes:
                     eval_metrics['mean_precision'](eval_metrics['class_{}_precision'.format(i)].result())
                     eval_metrics['mean_recall'](eval_metrics['class_{}_recall'.format(i)].result())
                     eval_metrics['mean_f1'](eval_metrics['class_{}_f1'.format(i)].result())
@@ -370,7 +371,7 @@ def train_and_evaluate():
                 eval_metrics['mean_recall'].reset_states()
                 eval_metrics['mean_f1'].reset_states()
                 # For each class
-                for i in range(1, num_event_classes + 1):
+                for i in event_classes:
                     # Get metrics
                     eval_tp, eval_fp1, eval_fp2, eval_fp3, eval_fn = eval_metrics['class_{}_tp_fp1_fp2_fp3_fn'.format(i)].result()
                     eval_pre = eval_metrics['class_{}_precision'.format(i)].result()
@@ -429,7 +430,8 @@ def predict():
     model.load_weights(os.path.join(FLAGS.model_dir, "checkpoints", FLAGS.model_ckpt))
     # Set up metrics
     cl_metrics = {}
-    for i in range(1, num_event_classes + 1):
+    event_classes = range(DEF_VAL + 1, DEF_VAL + num_event_classes + 1)
+    for i in event_classes:
         cl_metrics["tp_{}".format(i)] = 0; cl_metrics["fp1_{}".format(i)] = 0
         cl_metrics["fp2_{}".format(i)] = 0; cl_metrics["fp3_{}".format(i)] = 0
         cl_metrics["fn_{}".format(i)] = 0
@@ -488,8 +490,8 @@ def predict():
         preds = collapse(preds, seq_length=v_seq_length, def_val=DEF_VAL,
             pad_val=PAD_VAL)
         # Update metrics
-        for i in range(1, num_event_classes + 1):
-            other_vals = [j for j in range(1, num_event_classes + 1) if j != i]
+        for i in event_classes:
+            other_vals = [j for j in event_classes if j != i]
             other_vals = tf.constant(other_vals, tf.int32)
             tp, fp1, fp2, fp3, fn = metrics.evaluate_interval_detection(
                 labels=tf.expand_dims(labels, 0), predictions=preds,
@@ -522,7 +524,7 @@ def predict():
     # Print metrics
     logging.info("===================== Finished ====================")
     m_pre = 0; m_rec = 0; m_f1 = 0;
-    for i in range(1, num_event_classes + 1):
+    for i in event_classes:
         logging.info("---------------------- Class {} --------------------".format(i))
         cl_tp = cl_metrics["tp_{}".format(i)]
         cl_fp1 = cl_metrics["fp1_{}".format(i)]
