@@ -8,7 +8,11 @@ from absl import logging
 
 AUTOTUNE = tf.data.experimental.AUTOTUNE
 NUM_CHANNELS = 3
-NUM_EVENT_CLASSES_MAP = {"label_1": 1, "label_2": 3, "label_3": 5, "label_4": 4}
+EVENT_NAMES_MAP = {
+    "label_1": ["Idle", "bite"],
+    "label_2": ["Idle", "left", "right", "both"],
+    "label_3": ["Idle", "chopsticks", "fork", "hand", "knife", "spoon"],
+    "label_4": ["Idle", "bowl", "glass", "mug", "plate"]}
 NUM_TRAINING_FILES = 302
 FLIP_ACC = [-1., 1., 1.]
 FLIP_GYRO = [1., -1., -1.]
@@ -17,29 +21,24 @@ logging.set_verbosity(logging.INFO)
 
 class Dataset():
 
-    def __init__(self, label_mode, input_length, seq_shift):
+    def __init__(self, label_mode, input_length, seq_shift, def_val):
         self.label_mode = label_mode
         self.input_length = input_length
         self.input_fps = input_fps
         self.seq_shift = seq_shift
+        self.def_val = def_val
 
     def __get_hash_table(self, label_category):
-        if label_category == 'label_1':
-            table = tf.lookup.StaticHashTable(
-                tf.lookup.KeyValueTensorInitializer(
-                    ["Idle", "bite"], [0, 1]), -1)
-        elif label_category == 'label_2':
-            table = tf.lookup.StaticHashTable(
-                tf.lookup.KeyValueTensorInitializer(
-                    ["Idle", "left", "right", "both"], [0, 1, 2, 3]), -1)
-        elif label_category == 'label_3':
-            table = tf.lookup.StaticHashTable(
-                tf.lookup.KeyValueTensorInitializer(
-                    ["Idle", "chopsticks", "fork", "hand", "knife", "spoon"], [0, 1, 2, 3, 4, 5]), -1)
-        elif label_category == 'label_4':
-            table = tf.lookup.StaticHashTable(
-                tf.lookup.KeyValueTensorInitializer(
-                    ["Idle", "bowl", "glass", "mug", "plate"], [0, 1, 2, 3, 4]), -1)
+        assert self.def_val >= 0, "def_val must be greater or equal 0"
+        # Event names
+        event_names = EVENT_NAMES_MAP[label_category]
+        # Number of events including default event
+        num_events = len(event_names)
+        # Get the table
+        table = tf.lookup.StaticHashTable(
+            tf.lookup.KeyValueTensorInitializer(
+                keys=event_names,
+                values=tf.range(self.def_val, num_events + self.def_val, 1)), -1)
         return table
 
     def __get_input_parser(self, table):
@@ -89,7 +88,8 @@ class Dataset():
         return transformation_parser
 
     def num_classes(self):
-        return NUM_EVENT_CLASSES_MAP[self.label_mode]
+        """Return the number of classes, excluding the default event"""
+        return len(EVENT_NAMES_MAP[self.label_mode]) - 1
 
     def __call__(self, batch_size, is_training, is_predicting, data_dir, num_shuffle=1000):
         """Return the dataset pipeline"""
