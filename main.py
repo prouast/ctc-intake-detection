@@ -23,19 +23,21 @@ import oreba_inert_resnet_50_cnn_lstm
 import clemson_small_cnn_lstm
 
 # Representation
+# Event class vals will be consecutive numbers after DEF_VAL
 BLANK_INDEX = 0
-DEF_VAL = 0
-PAD_VAL = -1
+DEF_VAL = 1
+PAD_VAL = 0
+USE_DEF = True
 
 # Hyperparameters
-L2_LAMBDA = 1e-4
+L2_LAMBDA = 1e-5
 LR_BOUNDARIES = [5, 10, 15]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
-LR_DECAY_RATE = 0.8
+LR_DECAY_RATE = 0.7
 LR_DECAY_STEPS = 1
-NUM_SHUFFLE = 500000
+NUM_SHUFFLE = 5000
 
-LABEL_MODES = oreba_dis.NUM_EVENT_CLASSES_MAP.keys()
+LABEL_MODES = oreba_dis.EVENT_NAMES_MAP.keys()
 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer(name='batch_size',
@@ -91,15 +93,15 @@ flags.DEFINE_integer(name='train_epochs',
 
 logging.set_verbosity(logging.INFO)
 
-def _get_dataset(dataset, label_mode, input_mode, input_length, seq_shift):
+def _get_dataset(dataset, label_mode, input_mode, input_length, seq_shift, def_val):
     """Get the dataset"""
     if dataset == 'oreba-dis':
         dataset = oreba_dis.Dataset(label_mode, input_mode, input_length,
-            seq_shift)
+            seq_shift, def_val)
     elif dataset == 'fic':
-        dataset = fic.Dataset(label_mode, input_length, seq_shift)
+        dataset = fic.Dataset(label_mode, input_length, seq_shift, def_val)
     elif dataset == 'clemson':
-        dataset = clemson.Dataset(label_mode, input_length, seq_shift)
+        dataset = clemson.Dataset(label_mode, input_length, seq_shift, def_val)
     else:
         raise ValueError("Dataset {} not implemented!".format(FLAGS.dataset))
 
@@ -109,25 +111,25 @@ def _get_model(model, num_classes, input_length, l2_lambda):
     """Get the model"""
     if model == "oreba_video_small_cnn_lstm":
         model = oreba_video_small_cnn_lstm.Model(num_classes=num_classes,
-            input_length=input_length, l2_lambda=L2_LAMBDA)
+            input_length=input_length, l2_lambda=l2_lambda)
     elif model == "oreba_video_resnet_cnn_lstm":
         model = oreba_video_resnet_cnn_lstm.Model(num_classes=num_classes,
-            input_length=input_length, l2_lambda=L2_LAMBDA)
+            input_length=input_length, l2_lambda=l2_lambda)
     elif model == "oreba_inert_small_cnn_lstm":
         model = oreba_inert_small_cnn_lstm.Model(num_classes=num_classes,
-            input_length=input_length, l2_lambda=L2_LAMBDA)
+            input_length=input_length, l2_lambda=l2_lambda)
     elif model == "oreba_inert_heyd_cnn_lstm":
         model = oreba_inert_heyd_cnn_lstm.Model(num_classes=num_classes,
-            input_length=input_length, l2_lambda=L2_LAMBDA)
+            input_length=input_length, l2_lambda=l2_lambda)
     elif model == "oreba_inert_resnet_18_cnn_lstm":
         model = oreba_inert_resnet_18_cnn_lstm.Model(num_classes=num_classes,
-            input_length=input_length, l2_lambda=L2_LAMBDA)
+            input_length=input_length, l2_lambda=l2_lambda)
     elif model == "oreba_inert_resnet_50_cnn_lstm":
         model = oreba_inert_resnet_50_cnn_lstm.Model(num_classes=num_classes,
-            input_length=input_length, l2_lambda=L2_LAMBDA)
+            input_length=input_length, l2_lambda=l2_lambda)
     elif model == "clemson_small_cnn_lstm":
         model = clemson_small_cnn_lstm.Model(num_classes=num_classes,
-            input_length=input_length, l2_lambda=L2_LAMBDA)
+            input_length=input_length, l2_lambda=l2_lambda)
     else:
         raise ValueError("Model {} not implemented!".format(model))
     return model
@@ -138,11 +140,13 @@ def train_and_evaluate():
     # Get dataset
     dataset = _get_dataset(dataset=FLAGS.dataset, label_mode=FLAGS.label_mode,
         input_mode=FLAGS.input_mode, input_length=FLAGS.input_length,
-        seq_shift=FLAGS.seq_shift)
+        seq_shift=FLAGS.seq_shift, def_val=DEF_VAL)
 
     # Read the representation choice
     num_event_classes = dataset.num_classes()
-    num_classes = num_event_classes + 1
+    num_def_classes = 1 if USE_DEF else 0
+    num_classes = num_event_classes + num_def_classes + 1
+    shift = DEF_VAL - 1 if USE_DEF else DEF_VAL
 
     # Read the model choice
     model = _get_model(model=FLAGS.model, num_classes=num_classes,
@@ -234,7 +238,7 @@ def train_and_evaluate():
                 train_loss = loss(train_labels, train_logits,
                     loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
                     seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL,
-                    blank_index=BLANK_INDEX, training=True)
+                    blank_index=BLANK_INDEX, training=True, use_def=USE_DEF)
                 # l2 regularization loss
                 l2_loss = sum(model.losses)
                 # Gradients
@@ -245,7 +249,8 @@ def train_and_evaluate():
             # Decode logits into predictions
             train_predictions_u, train_predictions = decode(train_logits,
                 loss_mode=FLAGS.loss_mode, seq_length=seq_length,
-                blank_index=BLANK_INDEX, def_val=DEF_VAL)
+                blank_index=BLANK_INDEX, def_val=DEF_VAL, use_def=USE_DEF,
+                shift=shift)
             train_predictions_u = collapse(train_predictions_u,
                 seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL)
 
@@ -321,16 +326,16 @@ def train_and_evaluate():
                     eval_logits = model(eval_features, training=False)
                     # The loss function
                     eval_loss = loss(eval_labels, eval_logits,
-                            loss_mode=FLAGS.loss_mode,
-                            batch_size=FLAGS.batch_size, seq_length=seq_length,
-                            def_val=DEF_VAL, pad_val=PAD_VAL,
-                            blank_index=BLANK_INDEX, training=False)
+                        loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
+                        seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL,
+                        blank_index=BLANK_INDEX, training=False, use_def=USE_DEF)
                     eval_losses.append(eval_loss.numpy())
 
                     # Decode logits into predictions
                     eval_predictions_u, eval_predictions = decode(eval_logits,
                         loss_mode=FLAGS.loss_mode, seq_length=seq_length,
-                        blank_index=BLANK_INDEX, def_val=DEF_VAL)
+                        blank_index=BLANK_INDEX, def_val=DEF_VAL,
+                        use_def=USE_DEF, shift=shift)
                     eval_predictions_u = collapse(eval_predictions_u,
                         seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL)
 
@@ -406,10 +411,12 @@ def predict():
     # Get dataset
     dataset = _get_dataset(dataset=FLAGS.dataset, label_mode=FLAGS.label_mode,
         input_mode=FLAGS.input_mode, input_length=FLAGS.input_length,
-        seq_shift=FLAGS.seq_shift)
-    # Get the model
+        seq_shift=FLAGS.seq_shift, def_val=DEF_VAL)
+    # Get the representation
     num_event_classes = dataset.num_classes()
-    num_classes = num_event_classes + 1
+    num_def_classes = 1 if USE_DEF else 0
+    num_classes = num_event_classes + num_def_classes + 1
+    shift = DEF_VAL - 1 if USE_DEF else DEF_VAL
     # Read the model choice
     model = _get_model(model=FLAGS.model, num_classes=num_classes,
         input_length=FLAGS.input_length, l2_lambda=L2_LAMBDA)
@@ -448,7 +455,8 @@ def predict():
                 # Decode on batch level
                 b_preds, _ = decode(b_logits,
                     loss_mode=FLAGS.loss_mode, seq_length=seq_length,
-                    blank_index=BLANK_INDEX, def_val=DEF_VAL)
+                    blank_index=BLANK_INDEX, def_val=DEF_VAL, use_def=USE_DEF,
+                    shift=shift)
                 if FLAGS.predict_mode == 'batch_level_voted':
                     # Construct preds tensor
                     if i == 0:
@@ -468,7 +476,8 @@ def predict():
             # Decode on video level
             preds, _ = decode(tf.expand_dims(logits, 0),
                 loss_mode=FLAGS.loss_mode, seq_length=v_seq_length,
-                blank_index=BLANK_INDEX, def_val=DEF_VAL)
+                blank_index=BLANK_INDEX, def_val=DEF_VAL, use_def=USE_DEF,
+                shift=shift)
         elif FLAGS.predict_mode == 'batch_level':
             preds = tf.expand_dims(preds, 0)
         elif FLAGS.predict_mode == 'batch_level_voted':
