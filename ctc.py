@@ -11,16 +11,26 @@ def _collapse_sequences(labels, seq_length, def_val, pad_val, mode, pos):
 
     Args:
         labels: The labels, which includes default values (e.g, 0) and
-            sequences of interest (e.g., [0, 0, 1, 1, 1, 0, 0, 2, 2, 2, 0]).
+            event sequences of interest (e.g., [0, 0, 1, 1, 1, 0, 0, 2, 2, 2, 0]).
         seq_length: The length of each sequence
         def_val: The value which denotes the default value
         pad_val: The value which is used to pad sequences at the end
         mode:
-            'replace_collapsed' - Collapsed values are replaced with def_val.
-            'remove_collapsed' - Collapsed values are removed (Tensor is padded
-                with pad_val).
-            'remove_def' - Remove all def values after collapse (Tensor is
-                padded with pad_val).
+            'collapse_events_replace_collapsed'
+                - Collapse events and replace collapsed values with def_val.
+                    {e.g., 0, 0, 0, 1, 0, 0, 0, 0, 2, 0, 0}
+                => For deriving prediction from decoded logits
+            'collapse_all_remove_collapsed'
+                - Collapse event and default sequences, remove collapsed values.
+                    {e.g., 0, 1, 0, 2, 0, -1, -1, -1, -1, -1, -1}
+                => Prepare labels for ctc loss (with default class)
+            'collapse_events_remove_def'
+                - Collapse event sequences, remove collapsed values and all def.
+                    {e.g., 1, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1}
+                => Prepare labels for ctc loss (without default class)
+            'collapse_events_remove_collapsed'
+                - Collapse only events and remove collapsed values.
+                    {e.g., 0, 0, 1, 0, 0, 2, 0, -1, -1, -1, -1}
         pos: The position relative to the original sequence to keep the
             remaining non-collapsed value.
     """
@@ -35,7 +45,7 @@ def _collapse_sequences(labels, seq_length, def_val, pad_val, mode, pos):
     prev_mask = tf.concat([tf.ones_like(labels[:, :1], tf.bool), diff_mask], axis=1)
     next_mask = tf.concat([diff_mask, tf.ones_like(labels[:, :1], tf.bool)], axis=1)
 
-    if mode == 'replace_collapsed':
+    if mode == 'collapse_events_replace_collapsed':
 
         # Masks for non-default vals, sequence starts and ends
         not_default_mask = tf.not_equal(labels, tf.fill(tf.shape(labels), def_val))
@@ -102,7 +112,7 @@ def _collapse_sequences(labels, seq_length, def_val, pad_val, mode, pos):
 
         seq_length = tf.fill([batch_size], maxlen)
 
-    elif mode == 'remove_collapsed':
+    elif mode == 'collapse_events_remove_collapsed':
 
         # Mask for all def_val in the sequence
         default_mask = tf.equal(labels, tf.fill(tf.shape(labels), def_val))
@@ -124,7 +134,7 @@ def _collapse_sequences(labels, seq_length, def_val, pad_val, mode, pos):
 
         seq_length = new_seq_len
 
-    elif mode == 'remove_def':
+    elif mode == 'collapse_events_remove_def':
 
         # Mask for all def_val in the sequence
         non_default_mask = tf.not_equal(labels, tf.fill(tf.shape(labels), def_val))
@@ -145,6 +155,27 @@ def _collapse_sequences(labels, seq_length, def_val, pad_val, mode, pos):
         flat_shape = tf.shape(flat_idx_mask)
 
         seq_length = new_seq_len
+
+    elif mode == 'collapse_all_remove_collapsed':
+
+        # Mask for all sequence starts
+        flat_updates = tf.boolean_mask(labels, prev_mask, axis=0)
+
+        # Determine new sequence lengths / max length
+        new_seq_len = tf.reduce_sum(tf.cast(prev_mask, tf.int32), axis=1)
+        new_maxlen = tf.reduce_max(new_seq_len)
+
+        # Mask idx
+        idx_mask = tf.sequence_mask(new_seq_len, maxlen=new_maxlen)
+        flat_idx_mask = tf.reshape(idx_mask, [-1])
+        idx = tf.range(tf.size(idx_mask))
+        flat_idx = tf.boolean_mask(idx, flat_idx_mask, axis=0)
+        flat_shape = tf.shape(flat_idx_mask)
+
+        seq_length = new_seq_len
+
+    else:
+        raise ValueError("Mode {} not implemented!".format(mode))
 
     flat = tf.scatter_nd(
         indices=tf.expand_dims(flat_idx, axis=1),
@@ -184,20 +215,33 @@ def _compute_balanced_sample_weight(labels):
 ##### Loss functions
 
 @tf.function
-def _loss_ctc(labels, logits, batch_size, seq_length, def_val, pad_val, blank_index, training, pos='middle'):
+def _loss_ctc(labels, logits, batch_size, seq_length, def_val, pad_val, blank_index, training, use_def, pos='middle'):
     """CTC loss
     - Loss: CTC loss (preprocess_collapse_repeated=False, ctc_merge_repeated=True)
-    - Representation: Keep {event_val} only, no default values
-    - Collapse: Collapse event_val before loss (pad ends) {e.g., 12-1-1-1}
+    if use_def:
+        - Representation: Keep {event_val and def_val}
+        - Collapse: Collapse {event_val and def_val} {e.g., 01020-1-1-1}
+        # index 1 is default class
+    else:
+        - Representation: Keep {event_val} only, no default values
+        - Collapse: Collapse event_val before loss (pad ends) {e.g., 12-1-1-1}
     # index 0 is blank label
     """
-    if training:
-        # Calculate sample weights to account for dataset imbalance
-        sample_weights = _compute_balanced_sample_weight(labels)
-    # Collapse repeated events in labels, remove all def_val
-    labels, label_lengths = _collapse_sequences(labels, seq_length,
-        def_val=def_val, pad_val=pad_val, mode='remove_def', pos=pos)
+    #if training:
+    #    # Calculate sample weights to account for dataset imbalance
+    #    sample_weights = _compute_balanced_sample_weight(labels)
+    # Collapse repeated events in labels, mode depends on use_def
+    if use_def:
+        labels, label_lengths = _collapse_sequences(labels, seq_length,
+            def_val=def_val, pad_val=pad_val,
+            mode='collapse_all_remove_collapsed', pos=pos)
+    else:
+        labels, label_lengths = _collapse_sequences(labels, seq_length,
+            def_val=def_val, pad_val=pad_val,
+            mode='collapse_events_remove_def', pos=pos)
+    # Sequence lengths
     logit_lengths = tf.fill([batch_size], seq_length)
+    # The loss
     loss = tf.nn.ctc_loss(
         labels=labels,
         logits=logits,
@@ -205,10 +249,10 @@ def _loss_ctc(labels, logits, batch_size, seq_length, def_val, pad_val, blank_in
         logit_length=logit_lengths,
         logits_time_major=False,
         blank_index=blank_index)
-    if training:
-        # Multiply loss by sample weights
-        sample_weights = tf.reduce_mean(sample_weights, axis=1)
-        loss = sample_weights * loss
+    #if training:
+    #    # Multiply loss by sample weights
+    #    sample_weights = tf.reduce_mean(sample_weights, axis=1)
+    #    loss = sample_weights * loss
     # Reduce loss to scalar
     return tf.reduce_mean(loss)
 
@@ -247,12 +291,12 @@ def _loss_crossent(labels, logits):
         weights=weights)
     return loss
 
-def loss(labels, logits, loss_mode, batch_size, seq_length, def_val, pad_val, blank_index, training, pos='middle'):
+def loss(labels, logits, loss_mode, batch_size, seq_length, def_val, pad_val, blank_index, training, use_def, pos='middle'):
     """Return loss corresponding to loss_mode"""
     if loss_mode == 'ctc':
         return _loss_ctc(labels, logits, batch_size=batch_size,
             seq_length=seq_length, def_val=def_val, pad_val=pad_val,
-            blank_index=blank_index, training=training)
+            blank_index=blank_index, training=training, use_def=use_def)
     elif loss_mode == 'naive':
         return _loss_naive(labels, logits, batch_size=batch_size,
             seq_length=seq_length)
@@ -281,28 +325,36 @@ def _greedy_decode(inputs, seq_length, blank_index, def_val):
             tf.fill([seq_length], def_val), decoded)
     return decoded
 
-def _ctc_decode(inputs, seq_length, blank_index, def_val):
+def _ctc_decode(inputs, seq_length, blank_index, def_val, use_def, shift):
     """Perform ctc decoding"""
     batch_size = inputs.get_shape()[0]
     # Decode uses time major
     inputs = tf.transpose(a=inputs, perm=[1, 0, 2])
     seq_lengths = tf.fill([batch_size], seq_length)
+    # Perform beam search
     indices, values, shape, indices_u, values_u, shape_u, log_probs = ctc_ext_beam_search_decoder(
         inputs=inputs, sequence_length=seq_lengths,
         beam_width=15, blank_index=blank_index, top_paths=1,
-        blank_label=def_val)
+        blank_label=0)
     decoded = tf.sparse.SparseTensor(indices[0], values[0], shape[0])
     decoded = tf.cast(tf.sparse.to_dense(decoded), tf.int32)
     decoded_u = tf.sparse.SparseTensor(indices_u[0], values_u[0], shape_u[0])
     decoded_u = tf.cast(tf.sparse.to_dense(decoded_u), tf.int32)
+    # Set event vals
+    decoded = tf.where(tf.not_equal(decoded, 0), decoded+shift, decoded)
+    decoded_u = tf.where(tf.not_equal(decoded_u, 0), decoded_u+shift, decoded_u)
+    # Set default vals
+    decoded = tf.where(tf.equal(decoded, 0), def_val, decoded)
+    decoded_u = tf.where(tf.equal(decoded_u, 0), def_val, decoded_u)
     return decoded_u, decoded
 
-def decode(logits, loss_mode, seq_length, blank_index, def_val):
+def decode(logits, loss_mode, seq_length, blank_index, def_val, use_def, shift):
     """Decode ctc logits corresponding to loss_mode"""
 
     if loss_mode == 'ctc':
         return _ctc_decode(logits, seq_length=seq_length,
-            blank_index=blank_index, def_val=def_val)
+            blank_index=blank_index, def_val=def_val, use_def=use_def,
+            shift=shift)
     elif loss_mode == 'naive':
         return _greedy_decode(logits, seq_length=seq_length,
             blank_index=blank_index, def_val=def_val)
@@ -312,5 +364,5 @@ def decode(logits, loss_mode, seq_length, blank_index, def_val):
 
 def collapse(decoded, seq_length, def_val, pad_val, pos='moddle'):
     collapsed, _ = _collapse_sequences(decoded, seq_length, def_val=def_val,
-        pad_val=pad_val, mode='replace_collapsed', pos=pos)
+        pad_val=pad_val, mode='collapse_events_replace_collapsed', pos=pos)
     return collapsed
