@@ -90,15 +90,45 @@ class BlockLayer(tf.keras.layers.Layer):
         return inputs
 
 
+class LSTMLayer(tf.keras.layers.Layer):
+    """One LSTM layer with residual connection"""
+
+    def __init__(self, num_units, shortcut, l2_lambda):
+        super(LSTMLayer, self).__init__()
+        self.num_units = num_units
+        self.shortcut = shortcut
+        self.lstm = tf.keras.layers.LSTM(
+            units=num_units, return_sequences=True,
+            kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
+        if self.shortcut:
+            self.conv = Conv1DFixedPadding(filters=num_units,
+                kernel_size=1, strides=1, l2_lambda=l2_lambda)
+
+    @tf.function
+    def __call__(self, inputs, training=None):
+        if self.shortcut:
+            # If num_units == number of input features: direct shortcut
+            if self.num_units == inputs.shape[2]:
+                shortcut = inputs
+            # If not equal: Use conv layer to learn same amount of features
+            else:
+                shortcut = self.conv(inputs)
+
+        inputs = self.lstm(inputs)
+        if self.shortcut:
+            inputs = tf.keras.layers.add([inputs, shortcut])
+        return inputs
+
+
 class Model(tf.keras.Model):
     """Residual CNN-LSTM Model"""
 
     def __init__(self, num_classes, input_length, l2_lambda):
         super(Model, self).__init__()
         self.input_length = input_length
-        self.block_specs = [(2, 64, 5, 1), (2, 128, 5, 2), (2, 256, 3, 2),
-            (2, 512, 3, 2)]
-        self.lstm_specs = [64, 64]
+        self.block_specs = [(1, 128, 7, 1), (1, 128, 7, 2), (1, 256, 5, 2),
+            (1, 265, 3, 2)]
+        self.lstm_specs = [(64, False), (64, True)]
         self.conv_1 = Conv1DFixedPadding(filters=64,
             kernel_size=7, strides=1, l2_lambda=l2_lambda)
         self.relu = tf.keras.layers.ReLU()
@@ -110,10 +140,9 @@ class Model(tf.keras.Model):
                 num_blocks=blocks, num_filters=filters,
                 kernel_size=kernel_size, strides=strides, l2_lambda=l2_lambda))
         self.lstm_blocks = []
-        for i, num_units in enumerate(self.lstm_specs):
-            self.lstm_blocks.append(tf.keras.layers.LSTM(
-                units=num_units, return_sequences=True,
-                kernel_regularizer=tf.keras.regularizers.l2(l2_lambda)))
+        for i, (num_units, shortcut) in enumerate(self.lstm_specs):
+            self.lstm_blocks.append(LSTMLayer(
+                num_units=num_units, shortcut=shortcut, l2_lambda=l2_lambda))
         self.dense = tf.keras.layers.Dense(
             units=num_classes,
             kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
