@@ -40,7 +40,7 @@ class Model(tf.keras.Model):
             kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
 
     @tf.function
-    def __call__(self, inputs, training=False):
+    def call(self, inputs, training=False):
         inputs = self.conv1d_1(inputs)
         inputs = self.dropout(inputs)
         inputs = self.conv1d_2(inputs)

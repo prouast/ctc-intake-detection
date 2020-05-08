@@ -22,7 +22,7 @@ class Conv2DFixedPadding(tf.keras.layers.Layer):
             kernel_initializer=tf.keras.initializers.VarianceScaling())
 
     @tf.function
-    def __call__(self, inputs):
+    def call(self, inputs):
         if not self.strides_one:
             pad_total = self.kernel_size - 1
             pad_beg = pad_total // 2
@@ -62,7 +62,7 @@ class BottleneckResBlock(tf.keras.layers.Layer):
                 center=True, scale=True, fused=True)
 
     @tf.function
-    def __call__(self, inputs):
+    def call(self, inputs):
         shortcut = inputs
         if self.shortcut:
             shortcut = self.conv_sc(inputs)
@@ -94,7 +94,7 @@ class BlockLayer(tf.keras.layers.Layer):
                 BottleneckResBlock(filters=filters, shortcut=False, strides=1))
 
     @tf.function
-    def __call__(self, inputs):
+    def call(self, inputs):
         inputs = self.block(inputs)
         for block in self.blocks:
             inputs = block(inputs)
@@ -139,7 +139,7 @@ class Model(tf.keras.Model):
             units=num_classes)
 
     @tf.function
-    def __call__(self, inputs, training=False):
+    def call(self, inputs, training=False):
         # Resize inputs to ImageNet size
         num_seq = inputs.get_shape()[1]
         original_frame_size = inputs.get_shape()[2]

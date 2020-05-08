@@ -22,7 +22,7 @@ class Conv1DFixedPadding(tf.keras.layers.Layer):
             kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
 
     @tf.function
-    def __call__(self, inputs):
+    def call(self, inputs):
         if not self.strides_one:
             pad_total = self.kernel_size - 1
             pad_beg = pad_total // 2
@@ -53,7 +53,7 @@ class ResBlock(tf.keras.layers.Layer):
             momentum=BATCH_NORM_DECAY, epsilon=BATCH_NORM_EPSILON)
 
     @tf.function
-    def __call__(self, inputs, training=None):
+    def call(self, inputs, training=None):
         shortcut = inputs
         if self.shortcut:
             shortcut = self.conv_sc(shortcut)
@@ -83,7 +83,7 @@ class BlockLayer(tf.keras.layers.Layer):
                     shortcut=False, strides=1, l2_lambda=l2_lambda))
 
     @tf.function
-    def __call__(self, inputs, training=None):
+    def call(self, inputs, training=None):
         inputs = self.block(inputs, training=training)
         for block in self.blocks:
             inputs = block(inputs, training=training)
@@ -105,7 +105,7 @@ class LSTMLayer(tf.keras.layers.Layer):
                 kernel_size=1, strides=1, l2_lambda=l2_lambda)
 
     @tf.function
-    def __call__(self, inputs, training=None):
+    def call(self, inputs, training=None):
         if self.shortcut:
             # If num_units == number of input features: direct shortcut
             if self.num_units == inputs.shape[2]:
@@ -148,7 +148,7 @@ class Model(tf.keras.Model):
             kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
 
     @tf.function
-    def __call__(self, inputs, training=False):
+    def call(self, inputs, training=False):
         inputs = self.conv_1(inputs)
         inputs = self.relu(inputs)
         inputs = self.bn_1(inputs)

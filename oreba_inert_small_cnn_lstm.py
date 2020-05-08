@@ -34,11 +34,8 @@ class Model(tf.keras.Model):
     def __init__(self, num_classes, input_length, l2_lambda):
         super(Model, self).__init__()
         self.input_length = input_length
-        self.num_conv = [(128, 3, True), (128, 3, False),
-                         (128, 3, True), (128, 3, False),
-                         (256, 5, True), (256, 5, False),
-                         (256, 5, True), (256, 5, False)]
-        self.num_lstm = [128]
+        self.num_conv = [(64, 7, True), (128, 5, True), (256, 3, True)]
+        self.num_lstm = [64]
         self.conv_blocks = []
         for i, (num_filters, kernel_size, max_pool) in enumerate(self.num_conv):
             self.conv_blocks.append(ConvBlock(num_filters=num_filters,
