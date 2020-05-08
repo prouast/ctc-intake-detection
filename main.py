@@ -1,4 +1,5 @@
 import os
+import gc
 import numpy as np
 from absl import app
 from absl import flags
@@ -18,8 +19,8 @@ import oreba_video_small_cnn_lstm
 import oreba_video_resnet_cnn_lstm
 import oreba_inert_small_cnn_lstm
 import oreba_inert_heyd_cnn_lstm
+import oreba_inert_resnet_10_cnn_lstm
 import oreba_inert_resnet_18_cnn_lstm
-import oreba_inert_resnet_50_cnn_lstm
 import clemson_small_cnn_lstm
 
 # Representation
@@ -33,7 +34,7 @@ USE_DEF = True
 L2_LAMBDA = 1e-5
 LR_BOUNDARIES = [5, 10, 15]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
-LR_DECAY_RATE = 0.7
+LR_DECAY_RATE = 0.8
 LR_DECAY_STEPS = 1
 NUM_SHUFFLE = 500000
 
@@ -74,7 +75,7 @@ flags.DEFINE_enum(name='model',
     default='oreba_inert_small_cnn_lstm',
     enum_values=["oreba_video_small_cnn_lstm", "oreba_video_resnet_cnn_lstm",
         "oreba_inert_small_cnn_lstm", "oreba_inert_heyd_cnn_lstm",
-        "oreba_inert_resnet_18_cnn_lstm", "oreba_inert_resnet_50_cnn_lstm",
+        "oreba_inert_resnet_18_cnn_lstm", "oreba_inert_resnet_10_cnn_lstm",
         "clemson_small_cnn_lstm"],
     help='Select the model')
 flags.DEFINE_string(name='model_ckpt',
@@ -121,11 +122,11 @@ def _get_model(model, num_classes, input_length, l2_lambda):
     elif model == "oreba_inert_heyd_cnn_lstm":
         model = oreba_inert_heyd_cnn_lstm.Model(num_classes=num_classes,
             input_length=input_length, l2_lambda=l2_lambda)
+    elif model == "oreba_inert_resnet_10_cnn_lstm":
+        model = oreba_inert_resnet_10_cnn_lstm.Model(num_classes=num_classes,
+            input_length=input_length, l2_lambda=l2_lambda)
     elif model == "oreba_inert_resnet_18_cnn_lstm":
         model = oreba_inert_resnet_18_cnn_lstm.Model(num_classes=num_classes,
-            input_length=input_length, l2_lambda=l2_lambda)
-    elif model == "oreba_inert_resnet_50_cnn_lstm":
-        model = oreba_inert_resnet_50_cnn_lstm.Model(num_classes=num_classes,
             input_length=input_length, l2_lambda=l2_lambda)
     elif model == "clemson_small_cnn_lstm":
         model = clemson_small_cnn_lstm.Model(num_classes=num_classes,
@@ -231,21 +232,26 @@ def train_and_evaluate():
             # Adjust labels as specified by model
             train_labels = model.labels(train_labels, batch_size=FLAGS.batch_size)
 
-            # Open a GradientTape to record the operations run during forward pass
-            with tf.GradientTape() as tape:
-                # Run the forward pass
-                train_logits = model(train_features, training=True)
-                # The loss function
-                train_loss = loss(train_labels, train_logits,
-                    loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
-                    seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL,
-                    blank_index=BLANK_INDEX, training=True, use_def=USE_DEF)
-                # l2 regularization loss
-                l2_loss = sum(model.losses)
-                # Gradients
-                grads = tape.gradient(train_loss+l2_loss, model.trainable_weights)
-            # Apply the gradients
-            optimizer.apply_gradients(zip(grads, model.trainable_weights))
+            @tf.function
+            def _train_step():
+                # Open a GradientTape to record the operations run during forward pass
+                with tf.GradientTape() as tape:
+                    # Run the forward pass
+                    train_logits = model(train_features, training=True)
+                    # The loss function
+                    train_loss = loss(train_labels, train_logits,
+                        loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
+                        seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL,
+                        blank_index=BLANK_INDEX, training=True, use_def=USE_DEF)
+                    # l2 regularization loss
+                    l2_loss = sum(model.losses)
+                    # Gradients
+                    grads = tape.gradient(train_loss+l2_loss, model.trainable_weights)
+                    # Apply the gradients
+                    optimizer.apply_gradients(zip(grads, model.trainable_weights))
+                    return train_logits, train_loss, grads
+
+            train_logits, train_loss, grads = _train_step()
 
             # Decode logits into predictions
             train_predictions_u, train_predictions = decode(train_logits,
@@ -323,14 +329,19 @@ def train_and_evaluate():
                     eval_labels = model.labels(eval_labels,
                         batch_size=FLAGS.batch_size)
 
-                    # Run the forward pass
-                    eval_logits = model(eval_features, training=False)
-                    # The loss function
-                    eval_loss = loss(eval_labels, eval_logits,
-                        loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
-                        seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL,
-                        blank_index=BLANK_INDEX, training=False, use_def=USE_DEF)
-                    eval_losses.append(eval_loss.numpy())
+                    @tf.function
+                    def _eval_step():
+                        # Run the forward pass
+                        eval_logits = model(eval_features, training=False)
+                        # The loss function
+                        eval_loss = loss(eval_labels, eval_logits,
+                            loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
+                            seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL,
+                            blank_index=BLANK_INDEX, training=False, use_def=USE_DEF)
+                        eval_losses.append(eval_loss.numpy())
+                        return eval_logits, train_loss
+
+                    train_logits, eval_loss = _eval_step()
 
                     # Decode logits into predictions
                     eval_predictions_u, eval_predictions = decode(eval_logits,
@@ -401,6 +412,10 @@ def train_and_evaluate():
                 # TensorBoard
                 eval_writer.flush()
 
+            # Clean up memory
+            tf.keras.backend.clear_session()
+            gc.collect()
+
             # Increment global step
             global_step += 1
 
@@ -447,8 +462,12 @@ def predict():
         for i, (b_features, b_labels) in enumerate(data):
             # Adjust labels as specified by model
             b_labels = model.labels(b_labels, batch_size=FLAGS.batch_size)
-            # Run the forward pass
-            b_logits = model(b_features, training=False)
+            @tf.function
+            def _pred_step():
+                # Run the forward pass
+                b_logits = model(b_features, training=False)
+                return b_logits
+            b_logits = _pred_step()
             # Collect labels and logits
             labels = b_labels[0] if i==0 else tf.concat([labels, b_labels[:, -1]], 0)
             logits = b_logits[0] if i==0 else tf.concat([logits, b_logits[:, -1]], 0)
