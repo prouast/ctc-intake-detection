@@ -20,7 +20,7 @@ class ConvBlock(tf.keras.layers.Layer):
             self.max_pool = tf.keras.layers.MaxPool1D(pool_size=2, strides=2)
 
     @tf.function
-    def __call__(self, inputs, training):
+    def call(self, inputs, training):
         inputs = self.conv(inputs)
         inputs = self.relu(inputs)
         inputs = self.dropout(inputs)
@@ -51,7 +51,7 @@ class Model(tf.keras.Model):
         self.dropout = tf.keras.layers.Dropout(rate=0.5)
 
     @tf.function
-    def __call__(self, inputs, training):
+    def call(self, inputs, training):
         for conv_block in self.conv_blocks:
             inputs = conv_block(inputs, training=training)
         for lstm_block in self.lstm_blocks:

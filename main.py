@@ -36,7 +36,7 @@ LR_BOUNDARIES = [5, 10, 15]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
 LR_DECAY_RATE = 0.8
 LR_DECAY_STEPS = 1
-NUM_SHUFFLE = 500000
+NUM_SHUFFLE = 100000
 
 LABEL_MODES = oreba_dis.EVENT_NAMES_MAP.keys()
 
@@ -249,9 +249,9 @@ def train_and_evaluate():
                     grads = tape.gradient(train_loss+l2_loss, model.trainable_weights)
                     # Apply the gradients
                     optimizer.apply_gradients(zip(grads, model.trainable_weights))
-                    return train_logits, train_loss, grads
+                    return train_logits, train_loss, grads, l2_loss
 
-            train_logits, train_loss, grads = _train_step()
+            train_logits, train_loss, grads, l2_loss = _train_step()
 
             # Decode logits into predictions
             train_predictions_u, train_predictions = decode(train_logits,
@@ -338,10 +338,10 @@ def train_and_evaluate():
                             loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
                             seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL,
                             blank_index=BLANK_INDEX, training=False, use_def=USE_DEF)
-                        eval_losses.append(eval_loss.numpy())
-                        return eval_logits, train_loss
+                        return eval_logits, eval_loss
 
-                    train_logits, eval_loss = _eval_step()
+                    eval_logits, eval_loss = _eval_step()
+                    eval_losses.append(eval_loss.numpy())
 
                     # Decode logits into predictions
                     eval_predictions_u, eval_predictions = decode(eval_logits,
