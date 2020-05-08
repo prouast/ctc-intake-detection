@@ -126,8 +126,8 @@ class Model(tf.keras.Model):
     def __init__(self, num_classes, input_length, l2_lambda):
         super(Model, self).__init__()
         self.input_length = input_length
-        self.block_specs = [(1, 128, 7, 1), (1, 128, 7, 2), (1, 256, 5, 2),
-            (1, 265, 3, 2)]
+        self.block_specs = [(2, 64, 5, 1), (2, 128, 5, 2), (2, 256, 3, 2),
+            (2, 512, 3, 2)]
         self.lstm_specs = [(64, False), (64, True)]
         self.conv_1 = Conv1DFixedPadding(filters=64,
             kernel_size=7, strides=1, l2_lambda=l2_lambda)

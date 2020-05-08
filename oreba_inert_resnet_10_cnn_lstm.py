@@ -101,7 +101,7 @@ class Model(tf.keras.Model):
         self.input_length = input_length
         self.block_specs = [(128, 7, False), (128, 7, True), (256, 5, True),
           (265, 3, True)]
-        self.lstm_specs = [(64, True), (64, True)]
+        self.lstm_specs = [(64, False), (64, True)]
         self.conv_1 = Conv1D(filters=64, kernel_size=7, l2_lambda=l2_lambda)
         self.relu = tf.keras.layers.ReLU()
         self.bn_1 = tf.keras.layers.BatchNormalization(
