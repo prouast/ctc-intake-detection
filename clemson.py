@@ -24,7 +24,6 @@ class Dataset():
     def __init__(self, label_mode, input_length, seq_shift, def_val):
         self.label_mode = label_mode
         self.input_length = input_length
-        self.input_fps = input_fps
         self.seq_shift = seq_shift
         self.def_val = def_val
 
