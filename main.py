@@ -15,13 +15,11 @@ import metrics
 import oreba_dis
 import fic
 import clemson
-import oreba_video_small_cnn_lstm
-import oreba_video_resnet_cnn_lstm
-import oreba_inert_small_cnn_lstm
-import oreba_inert_heyd_cnn_lstm
-import oreba_inert_resnet_10_cnn_lstm
-import oreba_inert_resnet_18_cnn_lstm
-import clemson_small_cnn_lstm
+import video_small_cnn_lstm
+import video_resnet_cnn_lstm
+import inert_small_cnn_lstm
+import inert_heyd_cnn_lstm
+import inert_resnet_cnn_lstm
 
 # Representation
 # Event class vals will be consecutive numbers after DEF_VAL
@@ -59,7 +57,7 @@ flags.DEFINE_enum(name='label_mode',
     default="label_1", enum_values=LABEL_MODES,
     help='What is the label mode')
 flags.DEFINE_integer(name='log_steps',
-    default=100, help='Log after every x steps.')
+    default=50, help='Log after every x steps.')
 flags.DEFINE_enum(name='loss_mode',
     default="ctc", enum_values=["ctc", "naive", "crossent"],
     help='What is the loss mode')
@@ -72,11 +70,9 @@ flags.DEFINE_enum(name='mode',
     default="train_and_evaluate", enum_values=["train_and_evaluate", "predict"],
     help='What mode should tensorflow be started in')
 flags.DEFINE_enum(name='model',
-    default='oreba_inert_small_cnn_lstm',
-    enum_values=["oreba_video_small_cnn_lstm", "oreba_video_resnet_cnn_lstm",
-        "oreba_inert_small_cnn_lstm", "oreba_inert_heyd_cnn_lstm",
-        "oreba_inert_resnet_18_cnn_lstm", "oreba_inert_resnet_10_cnn_lstm",
-        "clemson_small_cnn_lstm"],
+    default='inert_small_cnn_lstm',
+    enum_values=["video_small_cnn_lstm", "video_resnet_cnn_lstm",
+        "inert_small_cnn_lstm", "inert_heyd_cnn_lstm", "inert_resnet_cnn_lstm"],
     help='Select the model')
 flags.DEFINE_string(name='model_ckpt',
     default=None, help='Model checkpoint for prediction (e.g., model_5000).')
@@ -108,31 +104,61 @@ def _get_dataset(dataset, label_mode, input_mode, input_length, seq_shift, def_v
 
     return dataset
 
-def _get_model(model, num_classes, input_length, l2_lambda):
+def _get_model(model, dataset, num_classes, input_length, l2_lambda):
     """Get the model"""
-    if model == "oreba_video_small_cnn_lstm":
-        model = oreba_video_small_cnn_lstm.Model(num_classes=num_classes,
+    if model == "video_small_cnn_lstm":
+        model = video_small_cnn_lstm.Model(num_classes=num_classes,
             input_length=input_length, l2_lambda=l2_lambda)
-    elif model == "oreba_video_resnet_cnn_lstm":
-        model = oreba_video_resnet_cnn_lstm.Model(num_classes=num_classes,
+    elif model == "video_resnet_cnn_lstm":
+        model = video_resnet_cnn_lstm.Model(num_classes=num_classes,
             input_length=input_length, l2_lambda=l2_lambda)
-    elif model == "oreba_inert_small_cnn_lstm":
-        model = oreba_inert_small_cnn_lstm.Model(num_classes=num_classes,
+    elif model == "inert_small_cnn_lstm":
+        if dataset == "oreba-dis":
+            specs = {
+                "seq_pool": 8,
+                "num_conv": [(64, 7, True), (128, 5, True), (256, 3, True)],
+                "num_lstm": [64]
+            }
+        elif dataset == "clemson":
+            specs = {
+                "seq_pool": 4,
+                "num_conv": [(64, 7, False), (128, 5, True), (256, 3, True)],
+                "num_lstm": [64]
+            }
+        elif dataset == "fic":
+            raise ValueError("Model not implemented for {}!".format(FLAGS.dataset))
+        model = inert_small_cnn_lstm.Model(num_classes=num_classes,
+            input_length=input_length, specs=specs, l2_lambda=l2_lambda)
+    elif model == "inert_heyd_cnn_lstm":
+        # Model does not need to be customized per dataset since it does
+        #  no sequence pooling
+        model = inert_heyd_cnn_lstm.Model(num_classes=num_classes,
             input_length=input_length, l2_lambda=l2_lambda)
-    elif model == "oreba_inert_heyd_cnn_lstm":
-        model = oreba_inert_heyd_cnn_lstm.Model(num_classes=num_classes,
-            input_length=input_length, l2_lambda=l2_lambda)
-    elif model == "oreba_inert_resnet_10_cnn_lstm":
-        model = oreba_inert_resnet_10_cnn_lstm.Model(num_classes=num_classes,
-            input_length=input_length, l2_lambda=l2_lambda)
-    elif model == "oreba_inert_resnet_18_cnn_lstm":
-        model = oreba_inert_resnet_18_cnn_lstm.Model(num_classes=num_classes,
-            input_length=input_length, l2_lambda=l2_lambda)
-    elif model == "clemson_small_cnn_lstm":
-        model = clemson_small_cnn_lstm.Model(num_classes=num_classes,
-            input_length=input_length, l2_lambda=l2_lambda)
+    elif model == "inert_resnet_cnn_lstm":
+        if dataset == "oreba-dis":
+            specs = {
+                "seq_pool": 8,
+                "conv_1_filters": 64,
+                "conv_1_kernel_size": 7,
+                "block_specs": [(2, 64, 5, 1), (2, 128, 5, 2), (2, 256, 3, 2),
+                    (2, 512, 3, 2)],
+                "lstm_specs": [(64, False), (64, True)]
+            }
+        elif dataset == "clemson":
+            specs = {
+                "seq_pool": 4,
+                "conv_1_filters": 64,
+                "conv_1_kernel_size": 7,
+                "block_specs": [(2, 64, 5, 1), (2, 128, 5, 2), (2, 256, 3, 1),
+                    (2, 512, 3, 2)],
+                "lstm_specs": [(64, False), (64, True)]
+            }
+        elif dataset == "fic":
+            raise ValueError("Model not implemented for {}!".format(FLAGS.dataset))
+        model = inert_resnet_cnn_lstm.Model(num_classes=num_classes,
+            input_length=input_length, specs=specs, l2_lambda=l2_lambda)
     else:
-        raise ValueError("Model {} not implemented!".format(model))
+        raise ValueError("Model not implemented for {}!".format(model))
     return model
 
 def train_and_evaluate():
@@ -150,8 +176,9 @@ def train_and_evaluate():
     shift = DEF_VAL - 1 if USE_DEF else DEF_VAL
 
     # Read the model choice
-    model = _get_model(model=FLAGS.model, num_classes=num_classes,
-        input_length=FLAGS.input_length, l2_lambda=L2_LAMBDA)
+    model = _get_model(model=FLAGS.model, dataset=FLAGS.dataset,
+        num_classes=num_classes, input_length=FLAGS.input_length,
+        l2_lambda=L2_LAMBDA)
 
     # Load weights
     if FLAGS.model_ckpt is not None:
@@ -434,8 +461,9 @@ def predict():
     num_classes = num_event_classes + num_def_classes + 1
     shift = DEF_VAL - 1 if USE_DEF else DEF_VAL
     # Read the model choice
-    model = _get_model(model=FLAGS.model, num_classes=num_classes,
-        input_length=FLAGS.input_length, l2_lambda=L2_LAMBDA)
+    model = _get_model(model=FLAGS.model, dataset=FLAGS.dataset,
+        num_classes=num_classes, input_length=FLAGS.input_length,
+        l2_lambda=L2_LAMBDA)
     # Make sure that seq_shift is set corresponding to model SEQ_POOL
     assert FLAGS.seq_shift == model.seq_pool(), \
         "seq_shift should be equal to model.seq_pool() in predict"

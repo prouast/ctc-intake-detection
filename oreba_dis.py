@@ -199,7 +199,7 @@ class Dataset():
                     inert_data = tf.concat([inert_data_left, inert_data_right], axis=1)
                     return inert_data
                 rotation_degree = tf.math.abs(
-                    tf.random.normal([], mean=0.0, stddev=10.0))
+                    tf.random.normal([], mean=0.0, stddev=5.0))
                 inert_data = _random_rotation(inert_data, rotation_degree)
                 # Random orientation change
                 def _change_orientation(inert_data, change_left, change_right):
@@ -211,11 +211,11 @@ class Dataset():
                     # Transform values
                     inert_data = tf.math.multiply(inert_data, mult)
                     return inert_data
-                change_left = tf.less(tf.random.uniform([], 0, 1.0), .5)
+                change_left = tf.less(tf.random.uniform([], 0, 1.0), .1)
                 inert_data = tf.cond(pred=condition,
                     true_fn=lambda: _change_orientation(inert_data, True, False),
                     false_fn=lambda: inert_data)
-                change_right = tf.less(tf.random.uniform([], 0, 1.0), .5)
+                change_right = tf.less(tf.random.uniform([], 0, 1.0), .1)
                 inert_data = tf.cond(pred=condition,
                     true_fn=lambda: _change_orientation(inert_data, False, True),
                     false_fn=lambda: inert_data)

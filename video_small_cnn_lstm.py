@@ -1,4 +1,4 @@
-"""CNN-LSTM Model for OREBA-DIS dataset from Rouast et al. (2019)"""
+"""CNN-LSTM Model for video data from Rouast et al. (2019)"""
 
 import tensorflow as tf
 
