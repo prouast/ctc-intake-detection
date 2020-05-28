@@ -18,18 +18,22 @@ def _collapse_sequences(labels, seq_length, def_val, pad_val, mode, pos):
         pad_val: The value which is used to pad sequences at the end
         mode:
             'collapse_events_replace_collapsed'
+                (part of inference)
                 - Collapse events and replace collapsed values with def_val.
                     {e.g., 0, 0, 0, 1, 0, 0, 0, 0, 2, 0, 0}
                 => For deriving prediction from decoded logits
             'collapse_all_remove_collapsed'
+                (ctc_loss with use_def, computing sequence weight)
                 - Collapse event and default sequences, remove collapsed values.
                     {e.g., 0, 1, 0, 2, 0, -1, -1, -1, -1, -1, -1}
                 => Prepare labels for ctc loss (with default class)
             'collapse_events_remove_def'
+                (ctc_loss without use_def)
                 - Collapse event sequences, remove collapsed values and all def.
                     {e.g., 1, 2, -1, -1, -1, -1, -1, -1, -1, -1, -1}
                 => Prepare labels for ctc loss (without default class)
             'collapse_events_remove_collapsed'
+                (not used at the moment)
                 - Collapse only events and remove collapsed values.
                     {e.g., 0, 0, 1, 0, 0, 2, 0, -1, -1, -1, -1}
         pos: The position relative to the original sequence to keep the
@@ -319,7 +323,6 @@ def _loss_crossent(labels, logits):
         weights=weights)
     return loss
 
-@tf.function
 def loss(labels, logits, loss_mode, batch_size, seq_length, def_val, pad_val, blank_index, training, use_def, pos='middle'):
     """Return loss corresponding to loss_mode"""
     if loss_mode == 'ctc':
@@ -378,7 +381,6 @@ def _ctc_decode(inputs, seq_length, blank_index, def_val, use_def, shift):
     decoded_u = tf.where(tf.equal(decoded_u, 0), def_val, decoded_u)
     return decoded_u, decoded
 
-@tf.function
 def decode(logits, loss_mode, seq_length, blank_index, def_val, use_def, shift):
     """Decode ctc logits corresponding to loss_mode"""
     if loss_mode == 'ctc':
@@ -392,7 +394,6 @@ def decode(logits, loss_mode, seq_length, blank_index, def_val, use_def, shift):
         return _greedy_decode(logits, seq_length=seq_length,
             blank_index=blank_index, def_val=def_val)
 
-@tf.function
 def collapse(decoded, seq_length, def_val, pad_val, pos='moddle'):
     collapsed, _ = _collapse_sequences(decoded, seq_length, def_val=def_val,
         pad_val=pad_val, mode='collapse_events_replace_collapsed', pos=pos)
