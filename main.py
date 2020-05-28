@@ -81,12 +81,13 @@ flags.DEFINE_string(name='model_dir',
 flags.DEFINE_enum(name='predict_mode',
     default='batch_level_voted', enum_values=['video_level', 'batch_level', 'batch_level_voted'],
     help='How should the predictions be aggregated?')
+flags.DEFINE_boolean(name='profile', default='False', help="Save profile")
 flags.DEFINE_integer(name='seq_shift',
     default=1, help='Shift when generating sequences.')
 flags.DEFINE_string(name='train_dir',
     default='data/inert/train', help='Directory for training data.')
 flags.DEFINE_integer(name='train_epochs',
-    default=30, help='Number of training epochs.')
+    default=120, help='Number of training epochs.')
 
 logging.set_verbosity(logging.INFO)
 
@@ -170,10 +171,10 @@ def train_and_evaluate():
         seq_shift=FLAGS.seq_shift, def_val=DEF_VAL)
 
     # Read the representation choice
-    num_event_classes = dataset.num_classes()
-    num_def_classes = 1 if USE_DEF else 0
-    num_classes = num_event_classes + num_def_classes + 1
-    shift = DEF_VAL - 1 if USE_DEF else DEF_VAL
+    num_event_classes = dataset.num_classes() # Number of classes including idle
+    num_def_classes = 1 if USE_DEF else 0 # Number of classes including DEF
+    num_classes = num_event_classes + num_def_classes + 1 # Total number of classes
+    shift = DEF_VAL - 1 if USE_DEF else DEF_VAL #
 
     # Read the model choice
     model = _get_model(model=FLAGS.model, dataset=FLAGS.dataset,
@@ -214,6 +215,7 @@ def train_and_evaluate():
         'mean_precision': keras.metrics.Mean(),
         'mean_recall': keras.metrics.Mean(),
         'mean_f1': keras.metrics.Mean()}
+    # event_classes are all classes except DEF
     event_classes = range(DEF_VAL + 1, DEF_VAL + num_event_classes + 1)
     for i in event_classes:
         other_vals = [j for j in event_classes if j != i]
@@ -256,6 +258,10 @@ def train_and_evaluate():
         # Iterate over training batches
         for step, (train_features, train_labels) in enumerate(train_dataset):
 
+            # Start profiling
+            if FLAGS.profile:
+                tf.profiler.experimental.start('run/profiler')
+
             # Adjust labels as specified by model
             train_labels = model.labels(train_labels, batch_size=FLAGS.batch_size)
 
@@ -287,6 +293,10 @@ def train_and_evaluate():
                 shift=shift)
             train_predictions_u = collapse(train_predictions_u,
                 seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL)
+
+            # Stop profiling
+            if FLAGS.profile:
+                tf.profiler.experimental.stop()
 
             # Log every FLAGS.log_steps steps.
             if global_step % FLAGS.log_steps == 0:

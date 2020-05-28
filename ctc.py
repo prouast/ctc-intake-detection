@@ -6,6 +6,7 @@ import collections
 from absl import logging
 from tensorflow_ctc_ext_beam_search_decoder import ctc_ext_beam_search_decoder
 
+@tf.function
 def _collapse_sequences(labels, seq_length, def_val, pad_val, mode, pos):
     """Collapse sequences of labels, optionally replacing with default value
 
@@ -191,6 +192,7 @@ def _collapse_sequences(labels, seq_length, def_val, pad_val, mode, pos):
 
     return result, seq_length
 
+@tf.function
 def _dense_to_sparse(input, eos_token=-1):
     """Convert dense tensor to sparse"""
     idx = tf.where(tf.not_equal(input, tf.constant(eos_token, input.dtype)))
@@ -199,6 +201,7 @@ def _dense_to_sparse(input, eos_token=-1):
     sparse = tf.SparseTensor(idx, values, shape)
     return sparse
 
+@tf.function
 def _compute_balanced_sequence_weight(labels, seq_length, def_val, pad_val, pos):
     # Collapse events and default events
     c_labels, _ = _collapse_sequences(labels, seq_length,
@@ -316,6 +319,7 @@ def _loss_crossent(labels, logits):
         weights=weights)
     return loss
 
+@tf.function
 def loss(labels, logits, loss_mode, batch_size, seq_length, def_val, pad_val, blank_index, training, use_def, pos='middle'):
     """Return loss corresponding to loss_mode"""
     if loss_mode == 'ctc':
@@ -350,6 +354,7 @@ def _greedy_decode(inputs, seq_length, blank_index, def_val):
             tf.fill([seq_length], def_val), decoded)
     return decoded
 
+@tf.function
 def _ctc_decode(inputs, seq_length, blank_index, def_val, use_def, shift):
     """Perform ctc decoding"""
     batch_size = inputs.get_shape()[0]
@@ -359,7 +364,7 @@ def _ctc_decode(inputs, seq_length, blank_index, def_val, use_def, shift):
     # Perform beam search
     indices, values, shape, indices_u, values_u, shape_u, log_probs = ctc_ext_beam_search_decoder(
         inputs=inputs, sequence_length=seq_lengths,
-        beam_width=15, blank_index=blank_index, top_paths=1,
+        beam_width=10, blank_index=blank_index, top_paths=1,
         blank_label=0)
     decoded = tf.sparse.SparseTensor(indices[0], values[0], shape[0])
     decoded = tf.cast(tf.sparse.to_dense(decoded), tf.int32)
@@ -373,9 +378,9 @@ def _ctc_decode(inputs, seq_length, blank_index, def_val, use_def, shift):
     decoded_u = tf.where(tf.equal(decoded_u, 0), def_val, decoded_u)
     return decoded_u, decoded
 
+@tf.function
 def decode(logits, loss_mode, seq_length, blank_index, def_val, use_def, shift):
     """Decode ctc logits corresponding to loss_mode"""
-
     if loss_mode == 'ctc':
         return _ctc_decode(logits, seq_length=seq_length,
             blank_index=blank_index, def_val=def_val, use_def=use_def,
@@ -387,6 +392,7 @@ def decode(logits, loss_mode, seq_length, blank_index, def_val, use_def, shift):
         return _greedy_decode(logits, seq_length=seq_length,
             blank_index=blank_index, def_val=def_val)
 
+@tf.function
 def collapse(decoded, seq_length, def_val, pad_val, pos='moddle'):
     collapsed, _ = _collapse_sequences(decoded, seq_length, def_val=def_val,
         pad_val=pad_val, mode='collapse_events_replace_collapsed', pos=pos)
