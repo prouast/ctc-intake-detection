@@ -1,8 +1,8 @@
-FROM tensorflow/tensorflow:custom-op-gpu-ubuntu16
+FROM tensorflow/tensorflow:latest-gpu
 
 ADD ./artifacts /artifacts
 
 RUN pip install tensorflow_addons
-RUN pip install artifacts/tensorflow_ctc_ext_beam_search_decoder-0.0.2-cp27-cp27mu-linux_x86_64.whl
+RUN pip install artifacts/tensorflow_ctc_ext_beam_search_decoder-0.0.2-cp36-cp36m-linux_x86_64.whl
 
 LABEL maintainer="philipp@rouast.com"
