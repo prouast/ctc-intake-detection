@@ -2,7 +2,6 @@
 
 import tensorflow as tf
 
-SEQ_POOL = 1
 
 class ConvBlock(tf.keras.layers.Layer):
     """One block of Conv2D-BN-Dropout-MaxPool2D"""
@@ -59,26 +58,15 @@ class Model(tf.keras.Model):
             units=num_classes,
             kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
 
-    @tf.function
-    def call(self, inputs, training=False):
-        for conv_block in self.conv_blocks:
-            inputs = conv_block(inputs)
-        inputs = self.flatten(inputs)
-        inputs = self.dense_1(inputs)
-        inputs = self.dropout(inputs)
-        for lstm_block in self.lstm_blocks:
-            inputs = lstm_block(inputs)
-        inputs = self.dense_2(inputs)
-        inputs = self.dropout(inputs)
-        return inputs
-
-    @tf.function
-    def labels(self, labels, batch_size=None):
-        """No pooling"""
+    def get_label_fn(self, batch_size=None):
+        """Returns the function needed for adjusting label dims"""
+        def labels(labels):
+            """No pooling"""
+            return labels
         return labels
 
-    def seq_length(self):
+    def get_seq_length(self):
         return self.input_length
 
-    def seq_pool(self):
-        return SEQ_POOL
+    def get_seq_pool(self):
+        return 1
