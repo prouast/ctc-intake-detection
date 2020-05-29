@@ -262,15 +262,14 @@ def train_and_evaluate():
             if FLAGS.profile:
                 tf.profiler.experimental.start('run/profiler')
 
-            # Adjust labels as specified by model
-            train_labels = model.labels(train_labels, batch_size=FLAGS.batch_size)
-
             @tf.function
-            def _train_step():
+            def _train_step(train_features, train_labels):
                 # Open a GradientTape to record the operations run during forward pass
                 with tf.GradientTape() as tape:
                     # Run the forward pass
                     train_logits = model(train_features, training=True)
+                    # Adjust labels as specified by model
+                    train_labels = model.labels(train_labels, batch_size=FLAGS.batch_size)
                     # The loss function
                     train_loss = loss(train_labels, train_logits,
                         loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
@@ -282,15 +281,18 @@ def train_and_evaluate():
                     grads = tape.gradient(train_loss+l2_loss, model.trainable_weights)
                     # Apply the gradients
                     optimizer.apply_gradients(zip(grads, model.trainable_weights))
-                    return train_logits, train_loss, grads, l2_loss
+                    return train_logits, train_labels, train_loss, grads, l2_loss
 
-            train_logits, train_loss, grads, l2_loss = _train_step()
+            # Run the train step
+            train_logits, train_labels, train_loss, grads, l2_loss = _train_step(
+                train_features, train_labels)
 
             # Decode logits into predictions
             train_predictions_u, train_predictions = decode(train_logits,
                 loss_mode=FLAGS.loss_mode, seq_length=seq_length,
                 blank_index=BLANK_INDEX, def_val=DEF_VAL, use_def=USE_DEF,
                 shift=shift)
+
             train_predictions_u = collapse(train_predictions_u,
                 seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL)
 
@@ -362,22 +364,21 @@ def train_and_evaluate():
                 # Iterate through eval batches
                 for i, (eval_features, eval_labels) in enumerate(eval_dataset):
 
-                    # Adjust labels as specified by model
-                    eval_labels = model.labels(eval_labels,
-                        batch_size=FLAGS.batch_size)
-
                     @tf.function
-                    def _eval_step():
+                    def _eval_step(eval_features, eval_labels):
                         # Run the forward pass
                         eval_logits = model(eval_features, training=False)
+                        # Adjust labels as specified by model
+                        eval_labels = model.labels(eval_labels,
+                            batch_size=FLAGS.batch_size)
                         # The loss function
                         eval_loss = loss(eval_labels, eval_logits,
                             loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
                             seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL,
                             blank_index=BLANK_INDEX, training=False, use_def=USE_DEF)
-                        return eval_logits, eval_loss
+                        return eval_logits, eval_labels, eval_loss
 
-                    eval_logits, eval_loss = _eval_step()
+                    eval_logits, eval_labels, eval_loss = _eval_step()
                     eval_losses.append(eval_loss.numpy())
 
                     # Decode logits into predictions
@@ -498,14 +499,14 @@ def predict():
             is_predicting=True, data_dir=filename)
         # Iterate through batches
         for i, (b_features, b_labels) in enumerate(data):
-            # Adjust labels as specified by model
-            b_labels = model.labels(b_labels, batch_size=FLAGS.batch_size)
             @tf.function
-            def _pred_step():
+            def _pred_step(b_features, b_labels):
                 # Run the forward pass
                 b_logits = model(b_features, training=False)
-                return b_logits
-            b_logits = _pred_step()
+                # Adjust labels as specified by model
+                b_labels = model.labels(b_labels, batch_size=FLAGS.batch_size)
+                return b_logits, b_labels
+            b_logits, b_labels = _pred_step(b_features, b_labels)
             # Collect labels and logits
             labels = b_labels[0] if i==0 else tf.concat([labels, b_labels[:, -1]], 0)
             logits = b_logits[0] if i==0 else tf.concat([logits, b_logits[:, -1]], 0)
