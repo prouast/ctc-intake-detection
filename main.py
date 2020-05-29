@@ -34,7 +34,7 @@ LR_BOUNDARIES = [5, 10, 15]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
 LR_DECAY_RATE = 0.8
 LR_DECAY_STEPS = 1
-NUM_SHUFFLE = 100000
+NUM_SHUFFLE = 10000
 
 LABEL_MODES = oreba_dis.EVENT_NAMES_MAP.keys()
 
@@ -259,8 +259,13 @@ def train_and_evaluate():
         for step, (train_features, train_labels) in enumerate(train_dataset):
 
             # Start profiling
-            if FLAGS.profile:
+            if FLAGS.profile and global_step == 0:
                 tf.profiler.experimental.start(os.path.join(FLAGS.model_dir, "profiler"))
+
+            # Stop profiling
+            if FLAGS.profile and global_step == 4:
+                tf.profiler.experimental.stop()
+                exit()
 
             @tf.function
             def _train_step(train_features, train_labels):
@@ -287,21 +292,15 @@ def train_and_evaluate():
             train_logits, train_labels, train_loss, grads, l2_loss = _train_step(
                 train_features, train_labels)
 
-            # Decode logits into predictions
-            train_predictions_u, train_predictions = decode(train_logits,
-                loss_mode=FLAGS.loss_mode, seq_length=seq_length,
-                blank_index=BLANK_INDEX, def_val=DEF_VAL, use_def=USE_DEF,
-                shift=shift)
-
-            train_predictions_u = collapse(train_predictions_u,
-                seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL)
-
-            # Stop profiling
-            if FLAGS.profile:
-                tf.profiler.experimental.stop()
-
             # Log every FLAGS.log_steps steps.
             if global_step % FLAGS.log_steps == 0:
+                # Decode logits into predictions
+                train_predictions_u, train_predictions = decode(train_logits,
+                    loss_mode=FLAGS.loss_mode, seq_length=seq_length,
+                    blank_index=BLANK_INDEX, def_val=DEF_VAL, use_def=USE_DEF,
+                    shift=shift)
+                train_predictions_u = collapse(train_predictions_u,
+                    seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL)
                 # Update metrics
                 for i in event_classes:
                     train_metrics['class_{}_precision'.format(i)](train_labels, train_predictions_u)
