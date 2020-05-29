@@ -260,16 +260,16 @@ def train_and_evaluate():
 
             # Start profiling
             if FLAGS.profile:
-                tf.profiler.experimental.start('run/profiler')
+                tf.profiler.experimental.start(os.path.join(FLAGS.model_dir, "profiler"))
 
             @tf.function
             def _train_step(train_features, train_labels):
+                # Adjust labels as specified by model
+                train_labels = model.labels(train_labels, batch_size=FLAGS.batch_size)
                 # Open a GradientTape to record the operations run during forward pass
                 with tf.GradientTape() as tape:
                     # Run the forward pass
                     train_logits = model(train_features, training=True)
-                    # Adjust labels as specified by model
-                    train_labels = model.labels(train_labels, batch_size=FLAGS.batch_size)
                     # The loss function
                     train_loss = loss(train_labels, train_logits,
                         loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
@@ -279,9 +279,9 @@ def train_and_evaluate():
                     l2_loss = sum(model.losses)
                     # Gradients
                     grads = tape.gradient(train_loss+l2_loss, model.trainable_weights)
-                    # Apply the gradients
-                    optimizer.apply_gradients(zip(grads, model.trainable_weights))
-                    return train_logits, train_labels, train_loss, grads, l2_loss
+                # Apply the gradients
+                optimizer.apply_gradients(zip(grads, model.trainable_weights))
+                return train_logits, train_labels, train_loss, grads, l2_loss
 
             # Run the train step
             train_logits, train_labels, train_loss, grads, l2_loss = _train_step(
@@ -378,7 +378,8 @@ def train_and_evaluate():
                             blank_index=BLANK_INDEX, training=False, use_def=USE_DEF)
                         return eval_logits, eval_labels, eval_loss
 
-                    eval_logits, eval_labels, eval_loss = _eval_step()
+                    eval_logits, eval_labels, eval_loss = _eval_step(
+                        eval_features, eval_labels)
                     eval_losses.append(eval_loss.numpy())
 
                     # Decode logits into predictions
