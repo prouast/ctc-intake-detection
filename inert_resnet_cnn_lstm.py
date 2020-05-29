@@ -46,10 +46,6 @@ class ResBlock(tf.keras.layers.Layer):
             self.conv_sc = Conv1DFixedPadding(filters=num_filters,
                 kernel_size=1, strides=strides, l2_lambda=l2_lambda)
         self.relu = tf.keras.layers.ReLU()
-        self.bn_1 = tf.keras.layers.BatchNormalization(
-            momentum=BATCH_NORM_DECAY, epsilon=BATCH_NORM_EPSILON)
-        self.bn_2 = tf.keras.layers.BatchNormalization(
-            momentum=BATCH_NORM_DECAY, epsilon=BATCH_NORM_EPSILON)
 
     @tf.function
     def call(self, inputs, training=None):
@@ -58,11 +54,9 @@ class ResBlock(tf.keras.layers.Layer):
             shortcut = self.conv_sc(shortcut)
         inputs = self.conv_1(inputs)
         inputs = self.relu(inputs)
-        inputs = self.bn_1(inputs)
         inputs = self.conv_2(inputs)
         inputs = tf.keras.layers.add([inputs, shortcut])
         inputs = self.relu(inputs)
-        inputs = self.bn_2(inputs)
         return inputs
 
 
