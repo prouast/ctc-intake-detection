@@ -61,7 +61,7 @@ class Model(tf.keras.Model):
         @tf.function
         def labels_without_batch_dim(labels):
             """Truncate according to convolutions"""
-            return labels = tf.slice(labels, [6], [self.input_length-12])
+            return tf.slice(labels, [6], [self.input_length-12])
 
         if batch_size is not None:
             return labels_with_batch_dim

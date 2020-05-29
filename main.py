@@ -297,7 +297,7 @@ def train_and_evaluate():
                 train_features, train_labels_c)
 
             # Log every FLAGS.log_steps steps.
-            if global_step % FLAGS.log_steps == 100:
+            if global_step % FLAGS.log_steps == 0:
                 # Decode logits into predictions
                 train_predictions_u, train_predictions = decode(train_logits,
                     loss_mode=FLAGS.loss_mode, seq_length=seq_length,
@@ -358,7 +358,7 @@ def train_and_evaluate():
                 train_writer.flush()
 
             # Evaluate every FLAGS.eval_steps steps.
-            if global_step % FLAGS.eval_steps == 100:
+            if global_step % FLAGS.eval_steps == 0:
                 logging.info('Evaluating at global step %s' % global_step)
 
                 # Keep track of eval losses
