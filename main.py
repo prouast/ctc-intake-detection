@@ -9,7 +9,8 @@ from tensorflow.python.platform import gfile
 from tensorflow import keras
 from ctc import decode
 from ctc import loss
-from ctc import collapse
+from ctc import get_collapse_fn_for_preprocessing
+from ctc import collapse_events_replace_collapsed
 from model_saver import ModelSaver
 import metrics
 import oreba_dis
@@ -176,18 +177,19 @@ def train_and_evaluate():
     num_classes = num_event_classes + num_def_classes + 1 # Total number of classes
     shift = DEF_VAL - 1 if USE_DEF else DEF_VAL #
 
-    # Read the model choice
+    # Read the model choice and infer seq_length
     model = _get_model(model=FLAGS.model, dataset=FLAGS.dataset,
         num_classes=num_classes, input_length=FLAGS.input_length,
         l2_lambda=L2_LAMBDA)
+
+    # Infer seq_length and label_fn from model
+    seq_length = model.get_seq_length()
+    label_fn = model.get_label_fn(FLAGS.batch_size)
 
     # Load weights
     if FLAGS.model_ckpt is not None:
         logging.info("Loading from {}".format(FLAGS.model_ckpt))
         model.load_weights(os.path.join(FLAGS.model_dir, "checkpoints", FLAGS.model_ckpt))
-
-    # Get the seq_length
-    seq_length = model.seq_length()
 
     # Instantiate learning rate schedule and optimizer
     if FLAGS.lr_decay_fn == "exponential":
@@ -201,10 +203,14 @@ def train_and_evaluate():
     optimizer = Adam(learning_rate=lr_schedule, clipnorm=10.0)
 
     # Get train and eval dataset
+    collapse_fn = get_collapse_fn_for_preprocessing(use_def=USE_DEF,
+        seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL)
     train_dataset = dataset(batch_size=FLAGS.batch_size, is_training=True,
-        is_predicting=False, data_dir=FLAGS.train_dir, num_shuffle=NUM_SHUFFLE)
+        is_predicting=False, data_dir=FLAGS.train_dir,
+        label_fn=label_fn, collapse_fn=collapse_fn, num_shuffle=NUM_SHUFFLE)
     eval_dataset = dataset(batch_size=FLAGS.batch_size, is_training=False,
-        is_predicting=False, data_dir=FLAGS.eval_dir, num_shuffle=NUM_SHUFFLE)
+        is_predicting=False, data_dir=FLAGS.eval_dir,
+        label_fn=label_fn, collapse_fn=collapse_fn, num_shuffle=NUM_SHUFFLE)
 
     # Instantiate the metrics
     train_metrics = {
@@ -256,27 +262,25 @@ def train_and_evaluate():
         logging.info('Starting epoch %d' % (epoch,))
 
         # Iterate over training batches
-        for step, (train_features, train_labels) in enumerate(train_dataset):
+        for step, (train_features, train_labels, train_labels_c) in enumerate(train_dataset):
 
             # Start profiling
             if FLAGS.profile and global_step == 0:
                 tf.profiler.experimental.start(os.path.join(FLAGS.model_dir, "profiler"))
 
             # Stop profiling
-            if FLAGS.profile and global_step == 4:
+            if FLAGS.profile and global_step == 9:
                 tf.profiler.experimental.stop()
                 exit()
 
             @tf.function
-            def _train_step(train_features, train_labels):
-                # Adjust labels as specified by model
-                train_labels = model.labels(train_labels, batch_size=FLAGS.batch_size)
+            def _train_step(train_features, train_labels_c):
                 # Open a GradientTape to record the operations run during forward pass
                 with tf.GradientTape() as tape:
                     # Run the forward pass
                     train_logits = model(train_features, training=True)
                     # The loss function
-                    train_loss = loss(train_labels, train_logits,
+                    train_loss = loss(train_labels_c, train_logits,
                         loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
                         seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL,
                         blank_index=BLANK_INDEX, training=True, use_def=USE_DEF)
@@ -286,20 +290,20 @@ def train_and_evaluate():
                     grads = tape.gradient(train_loss+l2_loss, model.trainable_weights)
                 # Apply the gradients
                 optimizer.apply_gradients(zip(grads, model.trainable_weights))
-                return train_logits, train_labels, train_loss, grads, l2_loss
+                return train_logits, train_loss, grads, l2_loss
 
             # Run the train step
-            train_logits, train_labels, train_loss, grads, l2_loss = _train_step(
-                train_features, train_labels)
+            train_logits, train_loss, grads, l2_loss = _train_step(
+                train_features, train_labels_c)
 
             # Log every FLAGS.log_steps steps.
-            if global_step % FLAGS.log_steps == 0:
+            if global_step % FLAGS.log_steps == 100:
                 # Decode logits into predictions
                 train_predictions_u, train_predictions = decode(train_logits,
                     loss_mode=FLAGS.loss_mode, seq_length=seq_length,
                     blank_index=BLANK_INDEX, def_val=DEF_VAL, use_def=USE_DEF,
                     shift=shift)
-                train_predictions_u = collapse(train_predictions_u,
+                train_predictions_u = collapse_events_replace_collapsed(train_predictions_u,
                     seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL)
                 # Update metrics
                 for i in event_classes:
@@ -354,31 +358,28 @@ def train_and_evaluate():
                 train_writer.flush()
 
             # Evaluate every FLAGS.eval_steps steps.
-            if global_step % FLAGS.eval_steps == 0:
+            if global_step % FLAGS.eval_steps == 100:
                 logging.info('Evaluating at global step %s' % global_step)
 
                 # Keep track of eval losses
                 eval_losses = []
 
                 # Iterate through eval batches
-                for i, (eval_features, eval_labels) in enumerate(eval_dataset):
+                for i, (eval_features, eval_labels, eval_labels_c) in enumerate(eval_dataset):
 
                     @tf.function
-                    def _eval_step(eval_features, eval_labels):
+                    def _eval_step(eval_features, eval_labels_c):
                         # Run the forward pass
                         eval_logits = model(eval_features, training=False)
-                        # Adjust labels as specified by model
-                        eval_labels = model.labels(eval_labels,
-                            batch_size=FLAGS.batch_size)
                         # The loss function
-                        eval_loss = loss(eval_labels, eval_logits,
+                        eval_loss = loss(eval_labels_c, eval_logits,
                             loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
                             seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL,
                             blank_index=BLANK_INDEX, training=False, use_def=USE_DEF)
-                        return eval_logits, eval_labels, eval_loss
+                        return eval_logits, eval_loss
 
-                    eval_logits, eval_labels, eval_loss = _eval_step(
-                        eval_features, eval_labels)
+                    eval_logits, eval_loss = _eval_step(
+                        eval_features, eval_labels_c)
                     eval_losses.append(eval_loss.numpy())
 
                     # Decode logits into predictions
@@ -386,7 +387,7 @@ def train_and_evaluate():
                         loss_mode=FLAGS.loss_mode, seq_length=seq_length,
                         blank_index=BLANK_INDEX, def_val=DEF_VAL,
                         use_def=USE_DEF, shift=shift)
-                    eval_predictions_u = collapse(eval_predictions_u,
+                    eval_predictions_u = collapse_events_replace_collapsed(eval_predictions_u,
                         seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL)
 
                     # Update metric
@@ -476,10 +477,10 @@ def predict():
         num_classes=num_classes, input_length=FLAGS.input_length,
         l2_lambda=L2_LAMBDA)
     # Make sure that seq_shift is set corresponding to model SEQ_POOL
-    assert FLAGS.seq_shift == model.seq_pool(), \
-        "seq_shift should be equal to model.seq_pool() in predict"
+    assert FLAGS.seq_shift == model.get_seq_pool(), \
+        "seq_shift should be equal to model.get_seq_pool() in predict"
     # Get the seq length
-    seq_length = model.seq_length()
+    seq_length = model.get_seq_length()
     # Load weights
     model.load_weights(os.path.join(FLAGS.model_dir, "checkpoints", FLAGS.model_ckpt))
     # Set up metrics
@@ -495,18 +496,21 @@ def predict():
     for filename in filenames:
         logging.info("Working on {0}.".format(filename))
         # Get the dataset
+        label_fn = model.get_label_fn(FLAGS.batch_size)
+        collapse_fn = get_collapse_fn_for_preprocessing(use_def=USE_DEF,
+            seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL)
         data = dataset(batch_size=FLAGS.batch_size, is_training=False,
-            is_predicting=True, data_dir=filename)
+            is_predicting=True, data_dir=filename, label_fn=label_fn,
+            collapse_fn=collapse_fn)
         # Iterate through batches
-        for i, (b_features, b_labels) in enumerate(data):
+        for i, (b_features, b_labels, b_labels_c) in enumerate(data):
             @tf.function
-            def _pred_step(b_features, b_labels):
+            def _pred_step(b_features):
                 # Run the forward pass
                 b_logits = model(b_features, training=False)
-                # Adjust labels as specified by model
-                b_labels = model.labels(b_labels, batch_size=FLAGS.batch_size)
-                return b_logits, b_labels
-            b_logits, b_labels = _pred_step(b_features, b_labels)
+                return b_logits
+            b_logits = _pred_step(b_features)
+            b_labels = label_fn(b_labels)
             # Collect labels and logits
             labels = b_labels[0] if i==0 else tf.concat([labels, b_labels[:, -1]], 0)
             logits = b_logits[0] if i==0 else tf.concat([logits, b_logits[:, -1]], 0)
@@ -545,7 +549,7 @@ def predict():
             preds = tf.argmax(preds, 1, tf.int32)
             preds = tf.expand_dims(preds, 0)
         # Collapse on video level
-        preds = collapse(preds, seq_length=v_seq_length, def_val=DEF_VAL,
+        preds = collapse_events_replace_collapsed(preds, seq_length=v_seq_length, def_val=DEF_VAL,
             pad_val=PAD_VAL)
         # Update metrics
         for i in event_classes:

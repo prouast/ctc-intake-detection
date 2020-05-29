@@ -6,6 +6,27 @@ import collections
 from absl import logging
 from tensorflow_ctc_ext_beam_search_decoder import ctc_ext_beam_search_decoder
 
+### Collapse functions
+
+def get_collapse_fn_for_preprocessing(use_def, seq_length, def_val, pad_val):
+    def collapse_all_remove_collapsed(labels):
+        collapsed, _ = _collapse_sequences(labels, seq_length, def_val=def_val,
+            pad_val=pad_val, mode="collapse_all_remove_collapsed", pos='middle')
+        return collapsed
+    def collapse_events_remove_def(labels):
+        collapsed, _ = _collapse_sequences(labels, seq_length, def_val=def_val,
+            pad_val=pad_val, mode="collapse_events_remove_def", pos='middle')
+        return collapsed
+    if use_def:
+        return collapse_all_remove_collapsed
+    else:
+        return collapse_events_remove_def
+
+def collapse_events_replace_collapsed(decoded, seq_length, def_val, pad_val, pos='middle'):
+    collapsed, _ = _collapse_sequences(decoded, seq_length, def_val=def_val,
+        pad_val=pad_val, mode='collapse_events_replace_collapsed', pos=pos)
+    return collapsed
+
 @tf.function
 def _collapse_sequences(labels, seq_length, def_val, pad_val, mode, pos):
     """Collapse sequences of labels, optionally replacing with default value
@@ -207,11 +228,7 @@ def _dense_to_sparse(input, eos_token=-1):
 
 @tf.function
 def _compute_balanced_sequence_weight(labels, seq_length, def_val, pad_val, pos):
-    # Collapse events and default events
-    c_labels, _ = _collapse_sequences(labels, seq_length,
-        def_val=def_val, pad_val=pad_val,
-        mode='collapse_all_remove_collapsed', pos=pos)
-    f_labels = tf.reshape(c_labels,[-1])
+    f_labels = tf.reshape(labels,[-1])
     # Classes, idx, and counts
     y, idx, count = tf.unique_with_counts(f_labels)
     # Predicate that indicates whether pad_val are present
@@ -240,7 +257,7 @@ def _compute_balanced_sequence_weight(labels, seq_length, def_val, pad_val, pos)
     class_weights = tf.map_fn(fn=calc_weight, elems=elems, dtype=tf.float64)
     # Gather sample weights in original tensor structure
     sample_weights = tf.gather(class_weights, idx)
-    sample_weights = tf.reshape(sample_weights, tf.shape(c_labels))
+    sample_weights = tf.reshape(sample_weights, tf.shape(labels))
     # Collect weights on sequence level
     sample_weights = tf.reduce_mean(sample_weights, axis=1)
     return tf.cast(sample_weights, tf.float32)
@@ -264,21 +281,13 @@ def _loss_ctc(labels, logits, batch_size, seq_length, def_val, pad_val, blank_in
         # Compute sequence weights to account for dataset imbalance
         sequence_weights = _compute_balanced_sequence_weight(
             labels, seq_length, def_val, pad_val, pos)
-    if use_def:
-        labels, label_lengths = _collapse_sequences(labels, seq_length,
-            def_val=def_val, pad_val=pad_val,
-            mode='collapse_all_remove_collapsed', pos=pos)
-    else:
-        labels, label_lengths = _collapse_sequences(labels, seq_length,
-            def_val=def_val, pad_val=pad_val,
-            mode='collapse_events_remove_def', pos=pos)
-    # Sequence lengths
+    labels = _dense_to_sparse(labels, eos_token=pad_val)
     logit_lengths = tf.fill([batch_size], seq_length)
     # The loss
     loss = tf.nn.ctc_loss(
         labels=labels,
         logits=logits,
-        label_length=label_lengths,
+        label_length=None,
         logit_length=logit_lengths,
         logits_time_major=False,
         blank_index=blank_index)
@@ -393,8 +402,3 @@ def decode(logits, loss_mode, seq_length, blank_index, def_val, use_def, shift):
     elif loss_mode == 'crossent':
         return _greedy_decode(logits, seq_length=seq_length,
             blank_index=blank_index, def_val=def_val)
-
-def collapse(decoded, seq_length, def_val, pad_val, pos='moddle'):
-    collapsed, _ = _collapse_sequences(decoded, seq_length, def_val=def_val,
-        pad_val=pad_val, mode='collapse_events_replace_collapsed', pos=pos)
-    return collapsed

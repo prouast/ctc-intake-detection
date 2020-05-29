@@ -96,7 +96,7 @@ class Dataset():
                 lambda f_w, l_w: tf.data.Dataset.zip(
                     (f_w.batch(self.input_length), l_w.batch(self.input_length))))
 
-    def __get_transformation_parser(self, is_training):
+    def __get_feature_transformation_parser(self, is_training):
         """Return the data transformation parser."""
 
         def image_transformation_parser(image_data, label_data):
@@ -227,11 +227,21 @@ class Dataset():
         elif self.input_mode == "inert":
             return inert_transformation_parser
 
+    def __get_batch_parser(self, label_fn, collapse_fn):
+        """Get the parser for processing one batch"""
+        def batch_parser(features, labels):
+            # 1. Transform labels via label_fn
+            labels = label_fn(labels)
+            # 2. Collapse labels
+            labels_collapsed = collapse_fn(labels)
+            return features, labels, labels_collapsed
+        return batch_parser
+
     def num_classes(self):
         """Return the number of classes, excluding the default event"""
         return len(EVENT_NAMES_MAP[self.label_mode]) - 1
 
-    def __call__(self, batch_size, is_training, is_predicting, data_dir, num_shuffle=1000):
+    def __call__(self, batch_size, is_training, is_predicting, data_dir, label_fn, collapse_fn, num_shuffle=1000):
         """Return the dataset pipeline"""
         # Scan for training files
         if is_predicting:
@@ -254,13 +264,15 @@ class Dataset():
             .map(map_func=self.__get_input_parser(table),
                 num_parallel_calls=AUTOTUNE)
             .apply(self.__get_sequence_batch_fn(is_training, is_predicting))
-            .map(map_func=self.__get_transformation_parser(is_training),
+            .map(map_func=self.__get_feature_transformation_parser(is_training),
                 num_parallel_calls=AUTOTUNE))
         dataset = files.interleave(pipeline, cycle_length=4,
             num_parallel_calls=AUTOTUNE)
         if is_training:
             dataset = dataset.shuffle(num_shuffle)
         dataset = dataset.batch(batch_size, drop_remainder=True)
+        dataset = dataset.map(map_func=self.__get_batch_parser(
+            label_fn, collapse_fn), num_parallel_calls=AUTOTUNE)
         dataset = dataset.prefetch(buffer_size=AUTOTUNE)
 
         return dataset

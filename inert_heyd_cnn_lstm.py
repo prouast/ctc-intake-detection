@@ -2,6 +2,7 @@
 
 import tensorflow as tf
 
+
 class Model(tf.keras.Model):
     """CNN-LSTM for inertial data"""
 
@@ -51,17 +52,24 @@ class Model(tf.keras.Model):
         inputs = self.dropout(inputs)
         return inputs
 
-    @tf.function
-    def labels(self, labels, batch_size=None):
-        """Truncate according to convolutions"""
-        if batch_size is not None:
-            labels = tf.slice(labels, [0, 6], [batch_size, self.input_length-12])
-        else:
-            labels = tf.slice(labels, [6], [self.input_length-12])
-        return labels
+    def get_label_fn(self, batch_size=None):
+        """Returns the function needed for adjusting label dims"""
+        @tf.function
+        def labels_with_batch_dim(labels):
+            """Truncate according to convolutions"""
+            return tf.slice(labels, [0, 6], [batch_size, self.input_length-12])
+        @tf.function
+        def labels_without_batch_dim(labels):
+            """Truncate according to convolutions"""
+            return labels = tf.slice(labels, [6], [self.input_length-12])
 
-    def seq_length(self):
+        if batch_size is not None:
+            return labels_with_batch_dim
+        else:
+            return labels_without_batch_dim
+
+    def get_seq_length(self):
         return self.input_length-12
 
-    def seq_pool(self):
+    def get_seq_pool(self):
         return SEQ_POOL

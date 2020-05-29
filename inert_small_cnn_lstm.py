@@ -59,25 +59,33 @@ class Model(tf.keras.Model):
         inputs = self.dropout(inputs)
         return inputs
 
-    @tf.function
-    def labels(self, labels, batch_size=None):
-        """Slice labels corresponding to pooling layers in model"""
-        if batch_size is not None:
+    def get_label_fn(self, batch_size=None):
+        """Returns the function needed for adjusting label dims"""
+        @tf.function
+        def labels_with_batch_dim(labels):
+            """Slice labels corresponding to pooling layers in model"""
             labels = tf.strided_slice(
                 input_=labels, begin=[0, self.seq_pool-1],
                 end=[batch_size, self.input_length],
                 strides=[1, self.seq_pool])
             labels = tf.reshape(labels,
                 [batch_size, int(self.input_length/self.seq_pool)])
-        else:
+            return labels
+        @tf.function
+        def labels_without_batch_dim(labels):
             labels = tf.strided_slice(
                 input_=labels, begin=[self.seq_pool-1], end=[self.input_length],
                 strides=[self.seq_pool])
             labels = tf.reshape(labels, [int(self.input_length/self.seq_pool)])
-        return labels
+            return labels
 
-    def seq_length(self):
+        if batch_size is not None:
+            return labels_with_batch_dim
+        else:
+            return labels_without_batch_dim
+
+    def get_seq_length(self):
         return int(self.input_length/self.seq_pool)
 
-    def seq_pool(self):
+    def get_seq_pool(self):
         return self.seq_pool

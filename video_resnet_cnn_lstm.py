@@ -2,7 +2,6 @@
 
 import tensorflow as tf
 
-SEQ_POOL = 1
 BATCH_NORM_DECAY = 0.997
 BATCH_NORM_EPSILON = 1e-5
 IMAGENET_SIZE = 224
@@ -165,13 +164,15 @@ class Model(tf.keras.Model):
         inputs = self.dense(inputs)
         return inputs
 
-    @tf.function
-    def labels(self, labels, batch_size=None):
-        """No pooling"""
+    def get_label_fn(self, batch_size=None):
+        """Returns the function needed for adjusting label dims"""
+        def labels(labels):
+            """No pooling"""
+            return labels
         return labels
 
-    def seq_length(self):
+    def get_seq_length(self):
         return self.input_length
 
-    def seq_pool(self):
-        return SEQ_POOL
+    def get_seq_pool(self):
+        return 1
