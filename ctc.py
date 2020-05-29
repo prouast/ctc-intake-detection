@@ -8,25 +8,6 @@ from tensorflow_ctc_ext_beam_search_decoder import ctc_ext_beam_search_decoder
 
 ### Collapse functions
 
-def get_collapse_fn_for_preprocessing(use_def, seq_length, def_val, pad_val):
-    def collapse_all_remove_collapsed(labels):
-        collapsed, _ = _collapse_sequences(labels, seq_length, def_val=def_val,
-            pad_val=pad_val, mode="collapse_all_remove_collapsed", pos='middle')
-        return collapsed
-    def collapse_events_remove_def(labels):
-        collapsed, _ = _collapse_sequences(labels, seq_length, def_val=def_val,
-            pad_val=pad_val, mode="collapse_events_remove_def", pos='middle')
-        return collapsed
-    if use_def:
-        return collapse_all_remove_collapsed
-    else:
-        return collapse_events_remove_def
-
-def collapse_events_replace_collapsed(decoded, seq_length, def_val, pad_val, pos='middle'):
-    collapsed, _ = _collapse_sequences(decoded, seq_length, def_val=def_val,
-        pad_val=pad_val, mode='collapse_events_replace_collapsed', pos=pos)
-    return collapsed
-
 @tf.function
 def _collapse_sequences(labels, seq_length, def_val, pad_val, mode, pos):
     """Collapse sequences of labels, optionally replacing with default value
@@ -262,6 +243,25 @@ def _compute_balanced_sequence_weight(labels, seq_length, def_val, pad_val, pos)
     sample_weights = tf.reduce_mean(sample_weights, axis=1)
     return tf.cast(sample_weights, tf.float32)
 
+def get_collapse_fn_for_preprocessing(use_def, seq_length, def_val, pad_val):
+    def collapse_all_remove_collapsed(labels):
+        collapsed, _ = _collapse_sequences(labels, seq_length, def_val=def_val,
+            pad_val=pad_val, mode="collapse_all_remove_collapsed", pos='middle')
+        return collapsed
+    def collapse_events_remove_def(labels):
+        collapsed, _ = _collapse_sequences(labels, seq_length, def_val=def_val,
+            pad_val=pad_val, mode="collapse_events_remove_def", pos='middle')
+        return collapsed
+    if use_def:
+        return collapse_all_remove_collapsed
+    else:
+        return collapse_events_remove_def
+
+def collapse_events_replace_collapsed(decoded, seq_length, def_val, pad_val, pos='middle'):
+    collapsed, _ = _collapse_sequences(decoded, seq_length, def_val=def_val,
+        pad_val=pad_val, mode='collapse_events_replace_collapsed', pos=pos)
+    return collapsed
+
 ##### Loss functions
 
 @tf.function
@@ -308,10 +308,10 @@ def _loss_crossent(labels, logits):
         weights=weights)
     return loss
 
-def loss(labels, logits, loss_mode, batch_size, seq_length, def_val, pad_val, blank_index, training, use_def, pos='middle'):
+def loss(labels, labels_c, logits, loss_mode, batch_size, seq_length, def_val, pad_val, blank_index, training, use_def, pos='middle'):
     """Return loss corresponding to loss_mode"""
     if loss_mode == 'ctc':
-        return _loss_ctc(labels, logits, batch_size=batch_size,
+        return _loss_ctc(labels_c, logits, batch_size=batch_size,
             seq_length=seq_length, def_val=def_val, pad_val=pad_val,
             blank_index=blank_index, training=training, use_def=use_def)
     elif loss_mode == 'crossent':
@@ -369,9 +369,6 @@ def decode(logits, loss_mode, seq_length, blank_index, def_val, use_def, shift):
         return _ctc_decode(logits, seq_length=seq_length,
             blank_index=blank_index, def_val=def_val, use_def=use_def,
             shift=shift)
-    elif loss_mode == 'naive':
-        return _greedy_decode(logits, seq_length=seq_length,
-            blank_index=blank_index, def_val=def_val)
     elif loss_mode == 'crossent':
         return _greedy_decode(logits, seq_length=seq_length,
             blank_index=blank_index, def_val=def_val)

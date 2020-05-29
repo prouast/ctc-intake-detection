@@ -274,13 +274,13 @@ def train_and_evaluate():
                 exit()
 
             @tf.function
-            def _train_step(train_features, train_labels_c):
+            def _train_step(train_features, train_labels, train_labels_c):
                 # Open a GradientTape to record the operations run during forward pass
                 with tf.GradientTape() as tape:
                     # Run the forward pass
                     train_logits = model(train_features, training=True)
                     # The loss function
-                    train_loss = loss(train_labels_c, train_logits,
+                    train_loss = loss(train_labels, train_labels_c, train_logits,
                         loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
                         seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL,
                         blank_index=BLANK_INDEX, training=True, use_def=USE_DEF)
@@ -294,7 +294,7 @@ def train_and_evaluate():
 
             # Run the train step
             train_logits, train_loss, grads, l2_loss = _train_step(
-                train_features, train_labels_c)
+                train_features, train_labels, train_labels_c)
 
             # Log every FLAGS.log_steps steps.
             if global_step % FLAGS.log_steps == 0:
@@ -368,18 +368,18 @@ def train_and_evaluate():
                 for i, (eval_features, eval_labels, eval_labels_c) in enumerate(eval_dataset):
 
                     @tf.function
-                    def _eval_step(eval_features, eval_labels_c):
+                    def _eval_step(eval_features, eval_labels, eval_labels_c):
                         # Run the forward pass
                         eval_logits = model(eval_features, training=False)
                         # The loss function
-                        eval_loss = loss(eval_labels_c, eval_logits,
+                        eval_loss = loss(eval_labels, eval_labels_c, eval_logits,
                             loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
                             seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL,
                             blank_index=BLANK_INDEX, training=False, use_def=USE_DEF)
                         return eval_logits, eval_loss
 
                     eval_logits, eval_loss = _eval_step(
-                        eval_features, eval_labels_c)
+                        eval_features, eval_labels, eval_labels_c)
                     eval_losses.append(eval_loss.numpy())
 
                     # Decode logits into predictions
