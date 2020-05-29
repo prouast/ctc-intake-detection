@@ -298,30 +298,6 @@ def _loss_ctc(labels, logits, batch_size, seq_length, def_val, pad_val, blank_in
     return tf.reduce_mean(loss)
 
 @tf.function
-def _loss_naive(labels, logits, batch_size, seq_length):
-    """Naive CTC loss (no collapse)
-    This loss only considers the probability of the single path
-        implied by the labels without any collapsing. Loss is computed as the
-        negative log likelihood of the probability.
-    - Loss: Naive CTC loss that takes sum(logs of logits at label indices)
-    - Representation: Keep everything, index 0 is blank label {e.g., 0011102200}
-    - Collapse: None
-    # index 0 is blank label
-    """
-    logits = tf.nn.softmax(logits)
-    flat_labels = tf.reshape(labels, [-1])
-    flat_logits = tf.reshape(logits, [-1])
-    # Reduce num_classes by getting indexes that should have high logits
-    flat_idx = flat_labels + tf.cast(tf.range(tf.shape(logits)[0] * \
-        tf.shape(logits)[1]) * tf.shape(logits)[2], tf.int32)
-    loss = tf.reshape(tf.gather(flat_logits, flat_idx), [batch_size, seq_length])
-    # Reduce seq_length by negative log-likelihood of product
-    loss = tf.reduce_sum(tf.negative(tf.math.log(loss)), axis=1)
-    # Reduce mean of batch losses
-    loss = tf.reduce_mean(loss)
-    return loss
-
-@tf.function
 def _loss_crossent(labels, logits):
     """Cross-entropy loss"""
     weights = tf.ones_like(labels, dtype=tf.float32)
@@ -338,9 +314,6 @@ def loss(labels, logits, loss_mode, batch_size, seq_length, def_val, pad_val, bl
         return _loss_ctc(labels, logits, batch_size=batch_size,
             seq_length=seq_length, def_val=def_val, pad_val=pad_val,
             blank_index=blank_index, training=training, use_def=use_def)
-    elif loss_mode == 'naive':
-        return _loss_naive(labels, logits, batch_size=batch_size,
-            seq_length=seq_length)
     elif loss_mode == 'crossent':
         return _loss_crossent(labels, logits)
 

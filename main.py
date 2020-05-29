@@ -60,7 +60,7 @@ flags.DEFINE_enum(name='label_mode',
 flags.DEFINE_integer(name='log_steps',
     default=50, help='Log after every x steps.')
 flags.DEFINE_enum(name='loss_mode',
-    default="ctc", enum_values=["ctc", "naive", "crossent"],
+    default="ctc", enum_values=["ctc", "crossent"],
     help='What is the loss mode')
 flags.DEFINE_float(name='lr_base',
     default=1e-3, help='Base learning rate.')
