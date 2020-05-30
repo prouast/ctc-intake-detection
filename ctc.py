@@ -208,39 +208,24 @@ def _dense_to_sparse(input, eos_token=-1):
   return sparse
 
 @tf.function
-def _compute_balanced_sequence_weight(labels, seq_length, def_val, pad_val, pos):
-  f_labels = tf.reshape(labels,[-1])
-  # Classes, idx, and counts
-  y, idx, count = tf.unique_with_counts(f_labels)
-  # Predicate that indicates whether pad_val are present
-  pred = tf.reduce_any(tf.equal(f_labels, pad_val))
-  # Number of present pad_val
-  pad_count = tf.reduce_sum(tf.cast(tf.equal(f_labels, pad_val), tf.int32))
-  # Total count excluding pad_val
-  total_count = tf.size(f_labels) - pad_count
-  # Label count excluding pad_val
-  label_count = tf.cond(pred=pred,
-    true_fn=lambda: tf.size(y) - 1, false_fn=lambda: tf.size(y))
-  # Calculate weights for labels, set weight for pad_val to 1.0
-  pad_index = tf.argmax(tf.cast(tf.equal(y, pad_val), tf.int32), output_type=tf.int32)
-  def calc_weight_no_pad(x):
-    return tf.divide(tf.divide(total_count, count[x]),
-      tf.cast(label_count, tf.float64))
-  def calc_weight_with_pad(x):
-    return tf.cond(pred=tf.equal(x, pad_index),
-             true_fn=lambda: tf.constant(1.0, tf.float64),
-             false_fn=lambda: calc_weight_no_pad(x))
-  def calc_weight(x):
-    return tf.cond(pred=pred,
-             true_fn=lambda: calc_weight_with_pad(x),
-             false_fn=lambda: calc_weight_no_pad(x))
-  elems = tf.range(0, label_count+1, 1, tf.int32)
-  class_weights = tf.map_fn(fn=calc_weight, elems=elems, dtype=tf.float64)
-  # Gather sample weights in original tensor structure
+def _balanced_sample_weight(labels):
+  # Reduce each label combination to unique string
+  u_labels = tf.sort(labels, axis=-1, direction='DESCENDING')
+  def join(x):
+    dec = tf.range(0, x.shape[0], 1)
+    dec = tf.map_fn(lambda x: tf.math.pow(10, x), dec)
+    return tf.math.reduce_sum(x * dec)
+  u_labels = tf.map_fn(join, u_labels)
+  # Identify unique label combinations, idx, and counts
+  y, idx, count = tf.unique_with_counts(u_labels)
+  # Calculate class weights
+  total_count = tf.size(u_labels)
+  label_count = tf.size(y)
+  calc_weight = lambda x: tf.divide(tf.divide(total_count, x),
+    tf.cast(label_count, tf.float64))
+  class_weights = tf.map_fn(fn=calc_weight, elems=count, dtype=tf.float64)
+  # Gather sample weights
   sample_weights = tf.gather(class_weights, idx)
-  sample_weights = tf.reshape(sample_weights, tf.shape(labels))
-  # Collect weights on sequence level
-  sample_weights = tf.reduce_mean(sample_weights, axis=1)
   return tf.cast(sample_weights, tf.float32)
 
 def get_collapse_fn_for_preprocessing(use_def, seq_length, def_val, pad_val):
@@ -277,8 +262,7 @@ def _loss_ctc(labels, labels_l, logits, batch_size, seq_length, def_val, pad_val
   """
   if training:
     # Compute sequence weights to account for dataset imbalance
-    sequence_weights = _compute_balanced_sequence_weight(
-      labels, seq_length, def_val, pad_val, pos)
+    sequence_weights = _balanced_sample_weight(labels)
   logit_lengths = tf.fill([batch_size], seq_length)
   # The loss
   loss = tf.nn.ctc_loss(
