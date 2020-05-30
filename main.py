@@ -35,7 +35,7 @@ LR_BOUNDARIES = [5, 10, 15]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
 LR_DECAY_RATE = 0.8
 LR_DECAY_STEPS = 1
-NUM_SHUFFLE = 10000
+NUM_SHUFFLE = 100000
 
 LABEL_MODES = oreba_dis.EVENT_NAMES_MAP.keys()
 
@@ -262,7 +262,7 @@ def train_and_evaluate():
         logging.info('Starting epoch %d' % (epoch,))
 
         # Iterate over training batches
-        for step, (train_features, train_labels, train_labels_c) in enumerate(train_dataset):
+        for step, (train_features, train_labels, train_labels_c, train_labels_l) in enumerate(train_dataset):
 
             # Start profiling
             if FLAGS.profile and global_step == 0:
@@ -274,13 +274,13 @@ def train_and_evaluate():
                 exit()
 
             @tf.function
-            def _train_step(train_features, train_labels, train_labels_c):
+            def _train_step(train_features, train_labels, train_labels_c, train_labels_l):
                 # Open a GradientTape to record the operations run during forward pass
                 with tf.GradientTape() as tape:
                     # Run the forward pass
                     train_logits = model(train_features, training=True)
                     # The loss function
-                    train_loss = loss(train_labels, train_labels_c, train_logits,
+                    train_loss = loss(train_labels, train_labels_c, train_labels_l, train_logits,
                         loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
                         seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL,
                         blank_index=BLANK_INDEX, training=True, use_def=USE_DEF)
@@ -294,7 +294,7 @@ def train_and_evaluate():
 
             # Run the train step
             train_logits, train_loss, grads, l2_loss = _train_step(
-                train_features, train_labels, train_labels_c)
+                train_features, train_labels, train_labels_c, train_labels_l)
 
             # Log every FLAGS.log_steps steps.
             if global_step % FLAGS.log_steps == 0:
@@ -365,21 +365,21 @@ def train_and_evaluate():
                 eval_losses = []
 
                 # Iterate through eval batches
-                for i, (eval_features, eval_labels, eval_labels_c) in enumerate(eval_dataset):
+                for i, (eval_features, eval_labels, eval_labels_c, eval_labels_l) in enumerate(eval_dataset):
 
                     @tf.function
-                    def _eval_step(eval_features, eval_labels, eval_labels_c):
+                    def _eval_step(eval_features, eval_labels, eval_labels_c, eval_labels_l):
                         # Run the forward pass
                         eval_logits = model(eval_features, training=False)
                         # The loss function
-                        eval_loss = loss(eval_labels, eval_labels_c, eval_logits,
+                        eval_loss = loss(eval_labels, eval_labels_c, eval_labels_l, eval_logits,
                             loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
                             seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL,
                             blank_index=BLANK_INDEX, training=False, use_def=USE_DEF)
                         return eval_logits, eval_loss
 
                     eval_logits, eval_loss = _eval_step(
-                        eval_features, eval_labels, eval_labels_c)
+                        eval_features, eval_labels, eval_labels_c, eval_labels_l)
                     eval_losses.append(eval_loss.numpy())
 
                     # Decode logits into predictions

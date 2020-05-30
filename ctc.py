@@ -245,13 +245,11 @@ def _compute_balanced_sequence_weight(labels, seq_length, def_val, pad_val, pos)
 
 def get_collapse_fn_for_preprocessing(use_def, seq_length, def_val, pad_val):
     def collapse_all_remove_collapsed(labels):
-        collapsed, _ = _collapse_sequences(labels, seq_length, def_val=def_val,
+        return _collapse_sequences(labels, seq_length, def_val=def_val,
             pad_val=pad_val, mode="collapse_all_remove_collapsed", pos='middle')
-        return collapsed
     def collapse_events_remove_def(labels):
-        collapsed, _ = _collapse_sequences(labels, seq_length, def_val=def_val,
+        return _collapse_sequences(labels, seq_length, def_val=def_val,
             pad_val=pad_val, mode="collapse_events_remove_def", pos='middle')
-        return collapsed
     if use_def:
         return collapse_all_remove_collapsed
     else:
@@ -265,7 +263,7 @@ def collapse_events_replace_collapsed(decoded, seq_length, def_val, pad_val, pos
 ##### Loss functions
 
 @tf.function
-def _loss_ctc(labels, logits, batch_size, seq_length, def_val, pad_val, blank_index, training, use_def, pos='middle'):
+def _loss_ctc(labels, labels_l, logits, batch_size, seq_length, def_val, pad_val, blank_index, training, use_def, pos='middle'):
     """CTC loss
     - Loss: CTC loss (preprocess_collapse_repeated=False, ctc_merge_repeated=True)
     if use_def:
@@ -281,13 +279,12 @@ def _loss_ctc(labels, logits, batch_size, seq_length, def_val, pad_val, blank_in
         # Compute sequence weights to account for dataset imbalance
         sequence_weights = _compute_balanced_sequence_weight(
             labels, seq_length, def_val, pad_val, pos)
-    labels = _dense_to_sparse(labels, eos_token=pad_val)
     logit_lengths = tf.fill([batch_size], seq_length)
     # The loss
     loss = tf.nn.ctc_loss(
         labels=labels,
         logits=logits,
-        label_length=None,
+        label_length=labels_l,
         logit_length=logit_lengths,
         logits_time_major=False,
         blank_index=blank_index)
@@ -308,10 +305,10 @@ def _loss_crossent(labels, logits):
         weights=weights)
     return loss
 
-def loss(labels, labels_c, logits, loss_mode, batch_size, seq_length, def_val, pad_val, blank_index, training, use_def, pos='middle'):
+def loss(labels, labels_c, labels_l, logits, loss_mode, batch_size, seq_length, def_val, pad_val, blank_index, training, use_def, pos='middle'):
     """Return loss corresponding to loss_mode"""
     if loss_mode == 'ctc':
-        return _loss_ctc(labels_c, logits, batch_size=batch_size,
+        return _loss_ctc(labels_c, labels_l, logits, batch_size=batch_size,
             seq_length=seq_length, def_val=def_val, pad_val=pad_val,
             blank_index=blank_index, training=training, use_def=use_def)
     elif loss_mode == 'crossent':

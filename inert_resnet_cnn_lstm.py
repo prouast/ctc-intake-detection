@@ -123,8 +123,8 @@ class Model(tf.keras.Model):
             kernel_size=specs["conv_1_kernel_size"], strides=1,
             l2_lambda=l2_lambda)
         self.relu = tf.keras.layers.ReLU()
-        self.bn_1 = tf.keras.layers.BatchNormalization(
-            momentum=BATCH_NORM_DECAY, epsilon=BATCH_NORM_EPSILON)
+        #self.bn_1 = tf.keras.layers.BatchNormalization(
+        #    momentum=BATCH_NORM_DECAY, epsilon=BATCH_NORM_EPSILON)
         self.conv_blocks = []
         for i, (blocks, filters, kernel_size, strides) in enumerate(self.block_specs):
             self.conv_blocks.append(BlockLayer(
@@ -142,7 +142,7 @@ class Model(tf.keras.Model):
     def call(self, inputs, training=False):
         inputs = self.conv_1(inputs)
         inputs = self.relu(inputs)
-        inputs = self.bn_1(inputs)
+        #inputs = self.bn_1(inputs)
         for conv_block in self.conv_blocks:
             inputs = conv_block(inputs, training=training)
         for lstm_block in self.lstm_blocks:

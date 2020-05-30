@@ -88,8 +88,8 @@ class Dataset():
             # 1. Transform labels via label_fn
             labels = label_fn(labels)
             # 2. Collapse labels
-            labels_collapsed = collapse_fn(labels)
-            return features, labels, labels_collapsed
+            labels_c, labels_l = collapse_fn(labels)
+            return features, labels, labels_c, labels_l
         return batch_parser
 
     def num_classes(self):
