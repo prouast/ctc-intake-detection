@@ -118,13 +118,13 @@ def _get_model(model, dataset, num_classes, input_length, l2_lambda):
     if dataset == "oreba-dis":
       specs = {
         "seq_pool": 8,
-        "num_conv": [(64, 7, True), (128, 5, True), (256, 3, True)],
+        "num_conv": [(64, 3, True), (128, 3, True), (256, 3, True)],
         "num_lstm": [64]
       }
     elif dataset == "clemson":
       specs = {
         "seq_pool": 4,
-        "num_conv": [(64, 7, False), (128, 5, True), (256, 3, True)],
+        "num_conv": [(64, 3, False), (128, 3, True), (256, 3, True)],
         "num_lstm": [64]
       }
     elif dataset == "fic":
@@ -280,20 +280,19 @@ def train_and_evaluate():
           # Run the forward pass
           train_logits = model(train_features, training=True)
           # The loss function
-          train_loss = loss(train_labels, train_labels_c, train_labels_l, train_logits,
-            loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
-            seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL,
-            blank_index=BLANK_INDEX, training=True, use_def=USE_DEF)
+          train_loss = loss(train_labels, train_labels_c, train_labels_l,
+            train_logits, loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
+            seq_length=seq_length, blank_index=BLANK_INDEX, training=True)
           # l2 regularization loss
-          l2_loss = sum(model.losses)
+          train_l2_loss = sum(model.losses)
           # Gradients
-          grads = tape.gradient(train_loss+l2_loss, model.trainable_weights)
+          train_grads = tape.gradient(train_loss+train_l2_loss, model.trainable_weights)
         # Apply the gradients
-        optimizer.apply_gradients(zip(grads, model.trainable_weights))
-        return train_logits, train_loss, grads, l2_loss
+        optimizer.apply_gradients(zip(train_grads, model.trainable_weights))
+        return train_logits, train_loss, train_l2_loss, train_grads
 
       # Run the train step
-      train_logits, train_loss, grads, l2_loss = _train_step(
+      train_logits, train_loss, train_l2_loss, train_grads = _train_step(
         train_features, train_labels, train_labels_c, train_labels_l)
 
       # Log every FLAGS.log_steps steps.
@@ -316,17 +315,17 @@ def train_and_evaluate():
         # General
         logging.info('Step %s in epoch %s; global step %s' % (step, epoch, global_step))
         logging.info('Seen this epoch: %s samples' % ((step + 1) * FLAGS.batch_size))
-        logging.info('Training loss (this step): %s' % float(train_loss))
+        logging.info('Total loss (this step): %s' % float(train_loss+train_l2_loss))
         logging.info('Mean training precision (this step): {}'.format(float(train_metrics['mean_precision'].result())))
         logging.info('Mean training recall (this step): {}'.format(float(train_metrics['mean_recall'].result())))
         logging.info('Mean training f1 (this step): {}'.format(float(train_metrics['mean_f1'].result())))
         # TensorBoard
         with train_writer.as_default():
           tf.summary.scalar("training/global_gradient_norm",
-            data=tf.linalg.global_norm(grads), step=global_step)
+            data=tf.linalg.global_norm(train_grads), step=global_step)
           tf.summary.scalar('training/loss', data=train_loss, step=global_step)
-          tf.summary.scalar('training/l2_loss', data=l2_loss, step=global_step)
-          tf.summary.scalar('training/total_loss', data=train_loss+l2_loss, step=global_step)
+          tf.summary.scalar('training/l2_loss', data=train_l2_loss, step=global_step)
+          tf.summary.scalar('training/total_loss', data=train_loss+train_l2_loss, step=global_step)
           tf.summary.scalar('training/learning_rate', data=lr_schedule(epoch), step=global_step)
           tf.summary.scalar('metrics/mean_precision', data=train_metrics['mean_precision'].result(), step=global_step)
           tf.summary.scalar('metrics/mean_recall', data=train_metrics['mean_recall'].result(), step=global_step)
@@ -372,13 +371,14 @@ def train_and_evaluate():
             # Run the forward pass
             eval_logits = model(eval_features, training=False)
             # The loss function
-            eval_loss = loss(eval_labels, eval_labels_c, eval_labels_l, eval_logits,
-              loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
-              seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL,
-              blank_index=BLANK_INDEX, training=False, use_def=USE_DEF)
-            return eval_logits, eval_loss
+            eval_loss = loss(eval_labels, eval_labels_c, eval_labels_l,
+              eval_logits, loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
+              seq_length=seq_length, blank_index=BLANK_INDEX, training=False)
+            # l2 regularization loss
+            eval_l2_loss = sum(model.losses)
+            return eval_logits, eval_loss, eval_l2_loss
 
-          eval_logits, eval_loss = _eval_step(
+          eval_logits, eval_loss, eval_l2_loss = _eval_step(
             eval_features, eval_labels, eval_labels_c, eval_labels_l)
           eval_losses.append(eval_loss.numpy())
 
@@ -404,13 +404,15 @@ def train_and_evaluate():
 
         # Console
         eval_loss = np.mean(eval_losses)
-        logging.info('Evaluation loss: %s' % float(eval_loss))
+        logging.info('Evaluation loss: %s' % float(eval_loss+eval_l2_loss))
         logging.info('Mean eval precision: {}'.format(float(eval_metrics['mean_precision'].result())))
         logging.info('Mean eval recall: {}'.format(float(eval_metrics['mean_recall'].result())))
         logging.info('Mean eval f1: {}'.format(float(eval_metrics['mean_f1'].result())))
         # TensorBoard
         with eval_writer.as_default():
           tf.summary.scalar('training/loss', data=eval_loss, step=global_step)
+          tf.summary.scalar('training/l2_loss', data=eval_l2_loss, step=global_step)
+          tf.summary.scalar('training/total_loss', data=eval_loss+eval_l2_loss, step=global_step)
           tf.summary.scalar('metrics/mean_precision', data=eval_metrics['mean_precision'].result(), step=global_step)
           tf.summary.scalar('metrics/mean_recall', data=eval_metrics['mean_recall'].result(), step=global_step)
           tf.summary.scalar('metrics/mean_f1', data=eval_metrics['mean_f1'].result(), step=global_step)

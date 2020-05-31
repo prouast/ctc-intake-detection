@@ -248,7 +248,7 @@ def collapse_events_replace_collapsed(decoded, seq_length, def_val, pad_val, pos
 ##### Loss functions
 
 @tf.function
-def _loss_ctc(labels, labels_l, logits, batch_size, seq_length, def_val, pad_val, blank_index, training, use_def, pos='middle'):
+def _loss_ctc(labels, labels_l, logits, batch_size, seq_length, blank_index, training):
   """CTC loss
   - Loss: CTC loss (preprocess_collapse_repeated=False, ctc_merge_repeated=True)
   if use_def:
@@ -289,12 +289,11 @@ def _loss_crossent(labels, logits):
     weights=weights)
   return loss
 
-def loss(labels, labels_c, labels_l, logits, loss_mode, batch_size, seq_length, def_val, pad_val, blank_index, training, use_def, pos='middle'):
+def loss(labels, labels_c, labels_l, logits, loss_mode, batch_size, seq_length, blank_index, training):
   """Return loss corresponding to loss_mode"""
   if loss_mode == 'ctc':
     return _loss_ctc(labels_c, labels_l, logits, batch_size=batch_size,
-      seq_length=seq_length, def_val=def_val, pad_val=pad_val,
-      blank_index=blank_index, training=training, use_def=use_def)
+      seq_length=seq_length, blank_index=blank_index, training=training)
   elif loss_mode == 'crossent':
     return _loss_crossent(labels, logits)
 
