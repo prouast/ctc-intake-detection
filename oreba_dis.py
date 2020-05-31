@@ -269,7 +269,10 @@ class Dataset():
     dataset = files.interleave(pipeline, cycle_length=4,
       num_parallel_calls=AUTOTUNE)
     if is_training:
-      dataset = dataset.shuffle(num_shuffle)
+      dataset = files.interleave(pipeline, cycle_length=4,
+        num_parallel_calls=AUTOTUNE).shuffle(num_shuffle)
+    else:
+      dataset = files.flat_map(pipeline)
     dataset = dataset.batch(batch_size, drop_remainder=True)
     dataset = dataset.map(map_func=self.__get_batch_parser(
       label_fn, collapse_fn), num_parallel_calls=AUTOTUNE)
