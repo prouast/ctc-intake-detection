@@ -19,9 +19,9 @@ class ConvBlock(tf.keras.layers.Layer):
 
   @tf.function
   def call(self, inputs, training):
+    inputs = self.dropout(inputs)
     inputs = self.conv(inputs)
     inputs = self.relu(inputs)
-    inputs = self.dropout(inputs)
     if self.max_pool:
       inputs = self.max_pool(inputs)
     return inputs
@@ -55,8 +55,8 @@ class Model(tf.keras.Model):
       inputs = conv_block(inputs, training=training)
     for lstm_block in self.lstm_blocks:
       inputs = lstm_block(inputs)
-    inputs = self.dense(inputs)
     inputs = self.dropout(inputs)
+    inputs = self.dense(inputs)
     return inputs
 
   def get_label_fn(self, batch_size=None):
