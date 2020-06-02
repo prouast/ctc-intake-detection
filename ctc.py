@@ -247,7 +247,7 @@ def collapse_events_replace_collapsed(decoded, seq_length, def_val, pad_val, pos
 
 ##### Loss functions
 
-@tf.function
+@tf.function(experimental_relax_shapes=True)
 def _loss_ctc(labels, labels_l, logits, batch_size, seq_length, blank_index, training):
   """CTC loss
   - Loss: CTC loss (preprocess_collapse_repeated=False, ctc_merge_repeated=True)
@@ -260,9 +260,6 @@ def _loss_ctc(labels, labels_l, logits, batch_size, seq_length, blank_index, tra
     - Collapse: Collapse event_val before loss (pad ends) {e.g., 12-1-1-1}
   # index 0 is blank label
   """
-  if training:
-    # Compute sequence weights to account for dataset imbalance
-    sequence_weights = _balanced_sample_weight(labels)
   logit_lengths = tf.fill([batch_size], seq_length)
   # The loss
   loss = tf.nn.ctc_loss(
@@ -273,6 +270,8 @@ def _loss_ctc(labels, labels_l, logits, batch_size, seq_length, blank_index, tra
     logits_time_major=False,
     blank_index=blank_index)
   if training:
+    # Compute sequence weights to account for dataset imbalance
+    sequence_weights = _balanced_sample_weight(labels)
     # Multiply loss by sequence weights
     loss = sequence_weights * loss
   # Reduce loss to scalar
@@ -293,8 +292,8 @@ def loss(labels, labels_c, labels_l, logits, loss_mode, batch_size, seq_length, 
   """Return loss corresponding to loss_mode"""
   if loss_mode == 'ctc':
     return _loss_ctc(labels_c, labels_l, logits,
-      batch_size=tf.constant(batch_size), seq_length=tf.constant(seq_length),
-      blank_index=tf.constant(blank_index), training=tf.constant(training))
+      batch_size=batch_size, seq_length=tf.constant(seq_length),
+      blank_index=blank_index, training=training)
   elif loss_mode == 'crossent':
     return _loss_crossent(labels, logits)
 
