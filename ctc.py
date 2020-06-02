@@ -292,8 +292,9 @@ def _loss_crossent(labels, logits):
 def loss(labels, labels_c, labels_l, logits, loss_mode, batch_size, seq_length, blank_index, training):
   """Return loss corresponding to loss_mode"""
   if loss_mode == 'ctc':
-    return _loss_ctc(labels_c, labels_l, logits, batch_size=batch_size,
-      seq_length=seq_length, blank_index=blank_index, training=training)
+    return _loss_ctc(labels_c, labels_l, logits,
+      batch_size=tf.constant(batch_size), seq_length=tf.constant(seq_length),
+      blank_index=tf.constant(blank_index), training=tf.constant(training))
   elif loss_mode == 'crossent':
     return _loss_crossent(labels, logits)
 
