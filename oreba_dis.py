@@ -179,46 +179,6 @@ class Dataset():
         inert_data = tf.cond(pred=condition,
           true_fn=lambda: _flip_hands(inert_data),
           false_fn=lambda: inert_data)
-        # Random x-z rotation
-        def _random_rotation(inert_data, rotation_degree):
-          """Rotate around y axis"""
-          # Derive multiplication matrix
-          mult_0 = (90.0-rotation_degree)/90.0
-          mult_1 = 1.0-mult_0
-          mult = tf.concat(
-            [[mult_0, 0.0, mult_1, 0.0,  0.0, 0.0],
-             [0.0,  1.0, 0.0,  0.0,  0.0, 0.0],
-             [mult_1, 0.0, mult_0, 0.0,  0.0, 0.0],
-             [0.0,  0.0, 0.0,  mult_0, 0.0, mult_1],
-             [0.0,  0.0, 0.0,  0.0,  1.0, 0.0],
-             [0.0,  0.0, 0.0,  mult_1, 0.0, mult_0]], axis=0)
-          mult = tf.reshape(mult, [6, 6])
-          # Rotation
-          inert_data_left = tf.linalg.matmul(inert_data[:, 0:6], mult)
-          inert_data_right = tf.linalg.matmul(inert_data[:, 6:12], mult)
-          inert_data = tf.concat([inert_data_left, inert_data_right], axis=1)
-          return inert_data
-        rotation_degree = tf.math.abs(
-          tf.random.normal([], mean=0.0, stddev=5.0))
-        inert_data = _random_rotation(inert_data, rotation_degree)
-        # Random orientation change
-        def _change_orientation(inert_data, change_left, change_right):
-          """Change orientation"""
-          # Derive multiplier
-          left_orient = FLIP_ORIENT if change_left else [1.0, 1.0, 1.0]
-          right_orient = FLIP_ORIENT if change_right else [1.0, 1.0, 1.0]
-          mult = tf.tile(tf.concat([left_orient, right_orient], axis=0), [2])
-          # Transform values
-          inert_data = tf.math.multiply(inert_data, mult)
-          return inert_data
-        change_left = tf.less(tf.random.uniform([], 0, 1.0), .1)
-        inert_data = tf.cond(pred=condition,
-          true_fn=lambda: _change_orientation(inert_data, True, False),
-          false_fn=lambda: inert_data)
-        change_right = tf.less(tf.random.uniform([], 0, 1.0), .1)
-        inert_data = tf.cond(pred=condition,
-          true_fn=lambda: _change_orientation(inert_data, False, True),
-          false_fn=lambda: inert_data)
 
       return inert_data, label_data
 
@@ -266,8 +226,6 @@ class Dataset():
       .apply(self.__get_sequence_batch_fn(is_training, is_predicting))
       .map(map_func=self.__get_feature_transformation_parser(is_training),
         num_parallel_calls=AUTOTUNE))
-    dataset = files.interleave(pipeline, cycle_length=4,
-      num_parallel_calls=AUTOTUNE)
     if is_training:
       dataset = files.interleave(pipeline, cycle_length=4,
         num_parallel_calls=AUTOTUNE).shuffle(num_shuffle)
