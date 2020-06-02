@@ -1,6 +1,7 @@
 import os
 import gc
 import numpy as np
+import psutil
 from absl import app
 from absl import flags
 from absl import logging
@@ -30,7 +31,7 @@ PAD_VAL = 0
 USE_DEF = True
 
 # Hyperparameters
-L2_LAMBDA = 1e-5
+L2_LAMBDA = 1e-4
 LR_BOUNDARIES = [5, 10, 15]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
 LR_DECAY_RATE = 0.8
@@ -63,7 +64,7 @@ flags.DEFINE_enum(name='loss_mode',
   default="ctc", enum_values=["ctc", "crossent"],
   help='What is the loss mode')
 flags.DEFINE_float(name='lr_base',
-  default=1e-3, help='Base learning rate.')
+  default=3e-4, help='Base learning rate.')
 flags.DEFINE_enum(name='lr_decay_fn',
   default="exponential", enum_values=["exponential", "piecewise_constant"],
   help='What is the input mode')
@@ -140,19 +141,19 @@ def _get_model(model, dataset, num_classes, input_length, l2_lambda):
     if dataset == "oreba-dis":
       specs = {
         "seq_pool": 8,
-        "conv_1_filters": 64,
-        "conv_1_kernel_size": 7,
-        "block_specs": [(2, 64, 5, 1), (2, 128, 5, 2), (2, 256, 3, 2),
-          (2, 512, 3, 2)],
+        "conv_1_filters": 32,
+        "conv_1_kernel_size": 5,
+        "block_specs": [(2, 32, 3, 1), (2, 64, 3, 2), (2, 128, 3, 2),
+          (2, 256, 3, 2)],
         "lstm_specs": [(64, False), (64, True)]
       }
     elif dataset == "clemson":
       specs = {
         "seq_pool": 4,
-        "conv_1_filters": 64,
-        "conv_1_kernel_size": 7,
-        "block_specs": [(2, 64, 5, 1), (2, 128, 5, 2), (2, 256, 3, 1),
-          (2, 512, 3, 2)],
+        "conv_1_filters": 32,
+        "conv_1_kernel_size": 5,
+        "block_specs": [(2, 32, 3, 1), (2, 64, 3, 2), (2, 128, 3, 1),
+          (2, 256, 3, 2)],
         "lstm_specs": [(64, False), (64, True)]
       }
     elif dataset == "fic":
@@ -263,6 +264,10 @@ def train_and_evaluate():
 
     # Iterate over training batches
     for step, (train_features, train_labels, train_labels_c, train_labels_l) in enumerate(train_dataset):
+
+      # Verbose logging
+      logging.info("Step {}".format(step))
+      logging.info("Memory used: {} GB".format(psutil.virtual_memory().used/2**30))
 
       # Start profiling
       if FLAGS.profile and global_step == 0:
