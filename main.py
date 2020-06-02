@@ -164,6 +164,36 @@ def _get_model(model, dataset, num_classes, input_length, l2_lambda):
     raise ValueError("Model not implemented for {}!".format(model))
   return model
 
+@tf.function
+def train_step(model, train_features, train_labels, train_labels_c, train_labels_l, seq_length, optimizer):
+  # Open a GradientTape to record the operations run during forward pass
+  with tf.GradientTape() as tape:
+    # Run the forward pass
+    train_logits = model(train_features, training=True)
+    # The loss function
+    train_loss = loss(train_labels, train_labels_c, train_labels_l,
+      train_logits, loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
+      seq_length=seq_length, blank_index=BLANK_INDEX, training=True)
+    # l2 regularization loss
+    train_l2_loss = sum(model.losses)
+    # Gradients
+    train_grads = tape.gradient(train_loss+train_l2_loss, model.trainable_weights)
+  # Apply the gradients
+  optimizer.apply_gradients(zip(train_grads, model.trainable_weights))
+  return train_logits, train_loss, train_l2_loss, train_grads
+
+@tf.function
+def eval_step(model, eval_features, eval_labels, eval_labels_c, eval_labels_l, seq_length):
+  # Run the forward pass
+  eval_logits = model(eval_features, training=False)
+  # The loss function
+  eval_loss = loss(eval_labels, eval_labels_c, eval_labels_l,
+    eval_logits, loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
+    seq_length=seq_length, blank_index=BLANK_INDEX, training=False)
+  # l2 regularization loss
+  eval_l2_loss = sum(model.losses)
+  return eval_logits, eval_loss, eval_l2_loss
+
 def train_and_evaluate():
   """Run the experiment."""
 
@@ -278,27 +308,10 @@ def train_and_evaluate():
         tf.profiler.experimental.stop()
         exit()
 
-      @tf.function
-      def _train_step(train_features, train_labels, train_labels_c, train_labels_l):
-        # Open a GradientTape to record the operations run during forward pass
-        with tf.GradientTape() as tape:
-          # Run the forward pass
-          train_logits = model(train_features, training=True)
-          # The loss function
-          train_loss = loss(train_labels, train_labels_c, train_labels_l,
-            train_logits, loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
-            seq_length=seq_length, blank_index=BLANK_INDEX, training=True)
-          # l2 regularization loss
-          train_l2_loss = sum(model.losses)
-          # Gradients
-          train_grads = tape.gradient(train_loss+train_l2_loss, model.trainable_weights)
-        # Apply the gradients
-        optimizer.apply_gradients(zip(train_grads, model.trainable_weights))
-        return train_logits, train_loss, train_l2_loss, train_grads
-
       # Run the train step
-      train_logits, train_loss, train_l2_loss, train_grads = _train_step(
-        train_features, train_labels, train_labels_c, train_labels_l)
+      train_logits, train_loss, train_l2_loss, train_grads = train_step(model,
+        train_features, train_labels, train_labels_c, train_labels_l, seq_length,
+        optimizer)
 
       # Log every FLAGS.log_steps steps.
       if global_step % FLAGS.log_steps == 0:
@@ -371,20 +384,8 @@ def train_and_evaluate():
         # Iterate through eval batches
         for i, (eval_features, eval_labels, eval_labels_c, eval_labels_l) in enumerate(eval_dataset):
 
-          @tf.function
-          def _eval_step(eval_features, eval_labels, eval_labels_c, eval_labels_l):
-            # Run the forward pass
-            eval_logits = model(eval_features, training=False)
-            # The loss function
-            eval_loss = loss(eval_labels, eval_labels_c, eval_labels_l,
-              eval_logits, loss_mode=FLAGS.loss_mode, batch_size=FLAGS.batch_size,
-              seq_length=seq_length, blank_index=BLANK_INDEX, training=False)
-            # l2 regularization loss
-            eval_l2_loss = sum(model.losses)
-            return eval_logits, eval_loss, eval_l2_loss
-
-          eval_logits, eval_loss, eval_l2_loss = _eval_step(
-            eval_features, eval_labels, eval_labels_c, eval_labels_l)
+          eval_logits, eval_loss, eval_l2_loss = eval_step(model,
+            eval_features, eval_labels, eval_labels_c, eval_labels_l, seq_length)
           eval_losses.append(eval_loss.numpy())
 
           # Decode logits into predictions
