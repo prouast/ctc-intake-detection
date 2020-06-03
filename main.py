@@ -31,25 +31,25 @@ PAD_VAL = 0
 USE_DEF = True
 
 # Hyperparameters
-L2_LAMBDA = 1e-4
+L2_LAMBDA = 1e-5
 LR_BOUNDARIES = [5, 10, 15]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
-LR_DECAY_RATE = 0.8
+LR_DECAY_RATE = 0.9
 LR_DECAY_STEPS = 1
-NUM_SHUFFLE = 100000
+NUM_SHUFFLE = 500000
 
 LABEL_MODES = oreba_dis.EVENT_NAMES_MAP.keys()
 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer(name='batch_size',
-  default=128, help='Batch size used for training.')
+  default=64, help='Batch size used for training.')
 flags.DEFINE_enum(name='dataset',
   default='oreba-dis', enum_values=["oreba-dis", "fic", "clemson"],
   help='Select the dataset')
 flags.DEFINE_string(name='eval_dir',
   default='data/inert/eval', help='Directory for val data.')
 flags.DEFINE_integer(name='eval_steps',
-  default=250, help='Eval and save best model after every x steps.')
+  default=1000, help='Eval and save best model after every x steps.')
 flags.DEFINE_integer(name='input_length',
   default=128, help='Number of input sequence elements.')
 flags.DEFINE_enum(name='input_mode',
@@ -59,12 +59,12 @@ flags.DEFINE_enum(name='label_mode',
   default="label_1", enum_values=LABEL_MODES,
   help='What is the label mode')
 flags.DEFINE_integer(name='log_steps',
-  default=50, help='Log after every x steps.')
+  default=200, help='Log after every x steps.')
 flags.DEFINE_enum(name='loss_mode',
   default="ctc", enum_values=["ctc", "crossent"],
   help='What is the loss mode')
 flags.DEFINE_float(name='lr_base',
-  default=3e-4, help='Base learning rate.')
+  default=1e-3, help='Base learning rate.')
 flags.DEFINE_enum(name='lr_decay_fn',
   default="exponential", enum_values=["exponential", "piecewise_constant"],
   help='What is the input mode')
@@ -85,11 +85,11 @@ flags.DEFINE_enum(name='predict_mode',
   help='How should the predictions be aggregated?')
 flags.DEFINE_boolean(name='profile', default='False', help="Save profile")
 flags.DEFINE_integer(name='seq_shift',
-  default=1, help='Shift when generating sequences.')
+  default=2, help='Shift when generating sequences.')
 flags.DEFINE_string(name='train_dir',
   default='data/inert/train', help='Directory for training data.')
 flags.DEFINE_integer(name='train_epochs',
-  default=120, help='Number of training epochs.')
+  default=60, help='Number of training epochs.')
 
 logging.set_verbosity(logging.INFO)
 
@@ -119,7 +119,7 @@ def _get_model(model, dataset, num_classes, input_length, l2_lambda):
     if dataset == "oreba-dis":
       specs = {
         "seq_pool": 8,
-        "num_conv": [(64, 3, True), (128, 3, True), (256, 3, True)],
+        "num_conv": [(64, 7, True), (128, 5, True), (256, 3, True)],
         "num_lstm": [64]
       }
     elif dataset == "clemson":
@@ -141,19 +141,19 @@ def _get_model(model, dataset, num_classes, input_length, l2_lambda):
     if dataset == "oreba-dis":
       specs = {
         "seq_pool": 8,
-        "conv_1_filters": 32,
-        "conv_1_kernel_size": 5,
-        "block_specs": [(2, 32, 3, 1), (2, 64, 3, 2), (2, 128, 3, 2),
-          (2, 256, 3, 2)],
-        "lstm_specs": [(64, False), (64, True)]
+        "conv_1_filters": 64,
+        "conv_1_kernel_size": 1,
+        "block_specs": [(1, 128, 3, 1), (1, 128, 3, 2), (1, 256, 5, 2),
+          (1, 256, 5, 2)],
+        "lstm_specs": [(64, False)]
       }
     elif dataset == "clemson":
       specs = {
         "seq_pool": 4,
-        "conv_1_filters": 32,
-        "conv_1_kernel_size": 5,
-        "block_specs": [(2, 32, 3, 1), (2, 64, 3, 2), (2, 128, 3, 1),
-          (2, 256, 3, 2)],
+        "conv_1_filters": 64,
+        "conv_1_kernel_size": 1,
+        "block_specs": [(1, 128, 3, 1), (1, 128, 3, 2), (1, 256, 3, 1),
+          (1, 256, 3, 2)],
         "lstm_specs": [(64, False), (64, True)]
       }
     elif dataset == "fic":
@@ -193,6 +193,12 @@ def eval_step(model, eval_features, eval_labels, eval_labels_c, eval_labels_l, s
   # l2 regularization loss
   eval_l2_loss = sum(model.losses)
   return eval_logits, eval_loss, eval_l2_loss
+
+@tf.function
+def pred_step(model, b_features):
+  # Run the forward pass
+  b_logits = model(b_features, training=False)
+  return b_logits
 
 def train_and_evaluate():
   """Run the experiment."""
@@ -296,15 +302,15 @@ def train_and_evaluate():
     for step, (train_features, train_labels, train_labels_c, train_labels_l) in enumerate(train_dataset):
 
       # Verbose logging
-      logging.info("Step {}".format(step))
-      logging.info("Memory used: {} GB".format(psutil.virtual_memory().used/2**30))
+      #logging.info("Step {}".format(step))
+      #logging.info("Memory used: {} GB".format(psutil.virtual_memory().used/2**30))
 
       # Start profiling
       if FLAGS.profile and global_step == 0:
         tf.profiler.experimental.start(os.path.join(FLAGS.model_dir, "profiler"))
 
       # Stop profiling
-      if FLAGS.profile and global_step == 9:
+      if FLAGS.profile and global_step == 49:
         tf.profiler.experimental.stop()
         exit()
 
@@ -315,6 +321,7 @@ def train_and_evaluate():
 
       # Log every FLAGS.log_steps steps.
       if global_step % FLAGS.log_steps == 0:
+        logging.info("Memory used: {} GB".format(psutil.virtual_memory().used/2**30))
         # Decode logits into predictions
         train_predictions_u, train_predictions = decode(train_logits,
           loss_mode=FLAGS.loss_mode, seq_length=seq_length,
@@ -511,14 +518,8 @@ def predict():
       is_predicting=True, data_dir=filename, label_fn=label_fn,
       collapse_fn=collapse_fn)
     # Iterate through batches
-    for i, (b_features, b_labels, b_labels_c) in enumerate(data):
-      @tf.function
-      def _pred_step(b_features):
-        # Run the forward pass
-        b_logits = model(b_features, training=False)
-        return b_logits
-      b_logits = _pred_step(b_features)
-      b_labels = label_fn(b_labels)
+    for i, (b_features, b_labels, _, _) in enumerate(data):
+      b_logits = pred_step(model, b_features)
       # Collect labels and logits
       labels = b_labels[0] if i==0 else tf.concat([labels, b_labels[:, -1]], 0)
       logits = b_logits[0] if i==0 else tf.concat([logits, b_logits[:, -1]], 0)
