@@ -35,8 +35,6 @@ LR_BOUNDARIES = [5, 10, 15]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
 LR_DECAY_RATE = 0.9
 LR_DECAY_STEPS = 1
-NUM_SHUFFLE = 500000
-
 LABEL_MODES = oreba_dis.EVENT_NAMES_MAP.keys()
 
 FLAGS = flags.FLAGS
@@ -79,6 +77,8 @@ flags.DEFINE_string(name='model_ckpt',
   default=None, help='Model checkpoint for prediction (e.g., model_5000).')
 flags.DEFINE_string(name='model_dir',
   default='run', help='Output directory for model and training stats.')
+flags.DEFINE_integer(name='num_shuffle',
+  default=500000, help='Size of the shuffle buffer.')
 flags.DEFINE_enum(name='predict_mode',
   default='batch_level_voted', enum_values=['video_level', 'batch_level', 'batch_level_voted'],
   help='How should the predictions be aggregated?')
@@ -244,10 +244,10 @@ def train_and_evaluate():
     seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL)
   train_dataset = dataset(batch_size=FLAGS.batch_size, is_training=True,
     is_predicting=False, data_dir=FLAGS.train_dir,
-    label_fn=label_fn, collapse_fn=collapse_fn, num_shuffle=NUM_SHUFFLE)
+    label_fn=label_fn, collapse_fn=collapse_fn, num_shuffle=FLAGS.num_sh)
   eval_dataset = dataset(batch_size=FLAGS.batch_size, is_training=False,
     is_predicting=False, data_dir=FLAGS.eval_dir,
-    label_fn=label_fn, collapse_fn=collapse_fn, num_shuffle=NUM_SHUFFLE)
+    label_fn=label_fn, collapse_fn=collapse_fn, num_shuffle=FLAGS.num_sh)
 
   # Instantiate the metrics
   train_metrics = {
