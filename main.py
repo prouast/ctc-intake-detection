@@ -33,7 +33,6 @@ PAD_VAL = 0
 L2_LAMBDA = 1e-5
 LR_BOUNDARIES = [5, 10, 15]
 LR_VALUE_DIV = [1., 10., 100., 1000.]
-LR_DECAY_RATE = 0.9
 LR_DECAY_STEPS = 1
 LABEL_MODES = oreba_dis.EVENT_NAMES_MAP.keys()
 
@@ -65,6 +64,8 @@ flags.DEFINE_float(name='lr_base',
 flags.DEFINE_enum(name='lr_decay_fn',
   default="exponential", enum_values=["exponential", "piecewise_constant"],
   help='What is the input mode')
+flags.DEFINE_float(name='lr_decay_rate',
+  default=0.9, help='Decay for exponential learning rate.')
 flags.DEFINE_enum(name='mode',
   default="train_and_evaluate", enum_values=["train_and_evaluate", "predict"],
   help='What mode should tensorflow be started in')
@@ -232,7 +233,7 @@ def train_and_evaluate():
   if FLAGS.lr_decay_fn == "exponential":
     lr_schedule = keras.optimizers.schedules.ExponentialDecay(
       initial_learning_rate=FLAGS.lr_base,
-      decay_steps=LR_DECAY_STEPS, decay_rate=LR_DECAY_RATE, staircase=True)
+      decay_steps=LR_DECAY_STEPS, decay_rate=FLAGS.lr_decay_rate, staircase=True)
   elif FLAGS.lr_decay_fn == "piecewise_constant":
     values = np.divide(FLAGS.lr_base, LR_VALUE_DIV)
     lr_schedule = keras.optimizers.schedules.PiecewiseConstantDecay(
