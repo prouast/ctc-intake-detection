@@ -247,7 +247,7 @@ def collapse_events_replace_collapsed(decoded, seq_length, def_val, pad_val, pos
 
 ##### Loss functions
 
-@tf.function(experimental_relax_shapes=True)
+@tf.function
 def _loss_ctc(labels, labels_l, logits, batch_size, seq_length, blank_index, training):
   """CTC loss
   - Loss: CTC loss (preprocess_collapse_repeated=False, ctc_merge_repeated=True)
@@ -329,7 +329,7 @@ def _ctc_decode(inputs, seq_length, blank_index, def_val, use_def, shift):
   # Perform beam search
   indices, values, shape, indices_u, values_u, shape_u, log_probs = ctc_ext_beam_search_decoder(
     inputs=inputs, sequence_length=seq_lengths,
-    beam_width=10, blank_index=blank_index, top_paths=1,
+    beam_width=20, blank_index=blank_index, top_paths=1,
     blank_label=0)
   decoded = tf.sparse.SparseTensor(indices[0], values[0], shape[0])
   decoded = tf.cast(tf.sparse.to_dense(decoded), tf.int32)
