@@ -28,7 +28,6 @@ import inert_resnet_cnn_lstm
 BLANK_INDEX = 0
 DEF_VAL = 1
 PAD_VAL = 0
-USE_DEF = True
 
 # Hyperparameters
 L2_LAMBDA = 1e-5
@@ -90,6 +89,7 @@ flags.DEFINE_string(name='train_dir',
   default='data/inert/train', help='Directory for training data.')
 flags.DEFINE_integer(name='train_epochs',
   default=60, help='Number of training epochs.')
+flags.DEFINE_boolean(name='use_def', default='True', help="Use def class for representation")
 
 logging.set_verbosity(logging.INFO)
 
@@ -210,9 +210,9 @@ def train_and_evaluate():
 
   # Read the representation choice
   num_event_classes = dataset.num_classes() # Number of classes including idle
-  num_def_classes = 1 if USE_DEF else 0 # Number of classes including DEF
+  num_def_classes = 1 if FLAGS.use_def else 0 # Number of classes including DEF
   num_classes = num_event_classes + num_def_classes + 1 # Total number of classes
-  shift = DEF_VAL - 1 if USE_DEF else DEF_VAL #
+  shift = DEF_VAL - 1 if FLAGS.use_def else DEF_VAL #
 
   # Read the model choice and infer seq_length
   model = _get_model(model=FLAGS.model, dataset=FLAGS.dataset,
@@ -240,7 +240,7 @@ def train_and_evaluate():
   optimizer = Adam(learning_rate=lr_schedule, clipnorm=10.0)
 
   # Get train and eval dataset
-  collapse_fn = get_collapse_fn_for_preprocessing(use_def=USE_DEF,
+  collapse_fn = get_collapse_fn_for_preprocessing(use_def=FLAGS.use_def,
     seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL)
   train_dataset = dataset(batch_size=FLAGS.batch_size, is_training=True,
     is_predicting=False, data_dir=FLAGS.train_dir,
@@ -321,7 +321,7 @@ def train_and_evaluate():
         # Decode logits into predictions
         train_predictions_u, train_predictions = decode(train_logits,
           loss_mode=FLAGS.loss_mode, seq_length=seq_length,
-          blank_index=BLANK_INDEX, def_val=DEF_VAL, use_def=USE_DEF,
+          blank_index=BLANK_INDEX, def_val=DEF_VAL, use_def=FLAGS.use_def,
           shift=shift)
         train_predictions_u = collapse_events_replace_collapsed(train_predictions_u,
           seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL)
@@ -395,7 +395,7 @@ def train_and_evaluate():
           eval_predictions_u, eval_predictions = decode(eval_logits,
             loss_mode=FLAGS.loss_mode, seq_length=seq_length,
             blank_index=BLANK_INDEX, def_val=DEF_VAL,
-            use_def=USE_DEF, shift=shift)
+            use_def=FLAGS.use_def, shift=shift)
           eval_predictions_u = collapse_events_replace_collapsed(eval_predictions_u,
             seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL)
 
@@ -480,9 +480,9 @@ def predict():
     seq_shift=FLAGS.seq_shift, def_val=DEF_VAL)
   # Get the representation
   num_event_classes = dataset.num_classes()
-  num_def_classes = 1 if USE_DEF else 0
+  num_def_classes = 1 if FLAGS.use_def else 0
   num_classes = num_event_classes + num_def_classes + 1
-  shift = DEF_VAL - 1 if USE_DEF else DEF_VAL
+  shift = DEF_VAL - 1 if FLAGS.use_def else DEF_VAL
   # Read the model choice
   model = _get_model(model=FLAGS.model, dataset=FLAGS.dataset,
     num_classes=num_classes, input_length=FLAGS.input_length,
@@ -508,7 +508,7 @@ def predict():
     logging.info("Working on {0}.".format(filename))
     # Get the dataset
     label_fn = model.get_label_fn(FLAGS.batch_size)
-    collapse_fn = get_collapse_fn_for_preprocessing(use_def=USE_DEF,
+    collapse_fn = get_collapse_fn_for_preprocessing(use_def=FLAGS.use_def,
       seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL)
     data = dataset(batch_size=FLAGS.batch_size, is_training=False,
       is_predicting=True, data_dir=filename, label_fn=label_fn,
@@ -524,7 +524,7 @@ def predict():
         # Decode on batch level
         b_preds, _ = decode(b_logits,
           loss_mode=FLAGS.loss_mode, seq_length=seq_length,
-          blank_index=BLANK_INDEX, def_val=DEF_VAL, use_def=USE_DEF,
+          blank_index=BLANK_INDEX, def_val=DEF_VAL, use_def=FLAGS.use_def,
           shift=shift)
         if FLAGS.predict_mode == 'batch_level_voted':
           # Construct preds tensor
@@ -545,7 +545,7 @@ def predict():
       # Decode on video level
       preds, _ = decode(tf.expand_dims(logits, 0),
         loss_mode=FLAGS.loss_mode, seq_length=v_seq_length,
-        blank_index=BLANK_INDEX, def_val=DEF_VAL, use_def=USE_DEF,
+        blank_index=BLANK_INDEX, def_val=DEF_VAL, use_def=FLAGS.use_def,
         shift=shift)
     elif FLAGS.predict_mode == 'batch_level':
       preds = tf.expand_dims(preds, 0)
