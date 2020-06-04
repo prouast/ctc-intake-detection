@@ -59,7 +59,7 @@ flags.DEFINE_enum(name='label_mode',
   default="label_1", enum_values=LABEL_MODES,
   help='What is the label mode')
 flags.DEFINE_integer(name='log_steps',
-  default=200, help='Log after every x steps.')
+  default=250, help='Log after every x steps.')
 flags.DEFINE_enum(name='loss_mode',
   default="ctc", enum_values=["ctc", "crossent"],
   help='What is the loss mode')
@@ -119,13 +119,13 @@ def _get_model(model, dataset, num_classes, input_length, l2_lambda):
     if dataset == "oreba-dis":
       specs = {
         "seq_pool": 8,
-        "num_conv": [(64, 7, True), (128, 5, True), (256, 3, True)],
+        "num_conv": [(64, 1, True), (128, 3, True), (256, 5, True)],
         "num_lstm": [64]
       }
     elif dataset == "clemson":
       specs = {
         "seq_pool": 4,
-        "num_conv": [(64, 3, False), (128, 3, True), (256, 3, True)],
+        "num_conv": [(64, 1, False), (128, 3, True), (256, 5, True)],
         "num_lstm": [64]
       }
     elif dataset == "fic":
@@ -143,8 +143,8 @@ def _get_model(model, dataset, num_classes, input_length, l2_lambda):
         "seq_pool": 8,
         "conv_1_filters": 64,
         "conv_1_kernel_size": 1,
-        "block_specs": [(1, 128, 3, 1), (1, 128, 3, 2), (1, 256, 5, 2),
-          (1, 256, 5, 2)],
+        "block_specs": [(1, 64, 3, 1), (1, 128, 3, 2), (1, 256, 3, 2),
+          (1, 512, 3, 2)],
         "lstm_specs": [(64, False)]
       }
     elif dataset == "clemson":
@@ -300,10 +300,6 @@ def train_and_evaluate():
 
     # Iterate over training batches
     for step, (train_features, train_labels, train_labels_c, train_labels_l) in enumerate(train_dataset):
-
-      # Verbose logging
-      #logging.info("Step {}".format(step))
-      #logging.info("Memory used: {} GB".format(psutil.virtual_memory().used/2**30))
 
       # Start profiling
       if FLAGS.profile and global_step == 0:
