@@ -245,10 +245,10 @@ def train_and_evaluate():
     seq_length=seq_length, def_val=DEF_VAL, pad_val=PAD_VAL)
   train_dataset = dataset(batch_size=FLAGS.batch_size, is_training=True,
     is_predicting=False, data_dir=FLAGS.train_dir,
-    label_fn=label_fn, collapse_fn=collapse_fn, num_shuffle=FLAGS.num_sh)
+    label_fn=label_fn, collapse_fn=collapse_fn, num_shuffle=FLAGS.num_shuffle)
   eval_dataset = dataset(batch_size=FLAGS.batch_size, is_training=False,
     is_predicting=False, data_dir=FLAGS.eval_dir,
-    label_fn=label_fn, collapse_fn=collapse_fn, num_shuffle=FLAGS.num_sh)
+    label_fn=label_fn, collapse_fn=collapse_fn, num_shuffle=FLAGS.num_shuffle)
 
   # Instantiate the metrics
   train_metrics = {

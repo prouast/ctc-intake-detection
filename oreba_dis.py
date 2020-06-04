@@ -183,8 +183,8 @@ class Dataset():
         def _random_rotation(inert_data, rotation_0_1):
           """Simulate rotating sensor around wrist (y axis)"""
           # Derive multiplication matrix
-          mult_0 = math.cos(rotation_0_1 * math.pi)
-          mult_1 = math.sin(rotation_0_1 * math.pi)
+          mult_0 = tf.math.cos(rotation_0_1 * math.pi)
+          mult_1 = tf.math.sin(rotation_0_1 * math.pi)
           mult = tf.concat(
             [[mult_0, 0.0, -mult_1, 0.0,  0.0, 0.0],
              [0.0,  1.0, 0.0,  0.0,  0.0, 0.0],
@@ -202,7 +202,7 @@ class Dataset():
         rotation_degree = tf.cond(
           pred=tf.math.less(tf.random.uniform([], 0.0, 1.0), .1),
           true_fn=lambda: tf.random.uniform([], 0.0, 1.0),
-          false_fn=lambda: tf.constant(0)])
+          false_fn=lambda: tf.constant(0.0))
         inert_data = _random_rotation(inert_data, rotation_degree)
         # Random orientation change
         def _change_orientation(inert_data, change_left, change_right):
