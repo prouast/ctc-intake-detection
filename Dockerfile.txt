@@ -1,0 +1,14 @@
+FROM tensorflow/tensorflow:latest-gpu
+ADD ./artifacts /artifacts
+RUN pip install --upgrade pip
+RUN pip uninstall -y tensorflow-gpu
+RUN pip install psutil \
+	memory_profiler \
+	matplotlib \
+	tensorflow_addons \
+	artifacts/tensorflow_ctc_ext_beam_search_decoder-0.1-cp36-cp36m-linux_x86_64.whl
+RUN pip install --upgrade tensorflow
+RUN apt-get update && apt-get install -y \
+	google-perftools \
+	libgcc-7-dev
+LABEL maintainer="philipp@rouast.com"
