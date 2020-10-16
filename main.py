@@ -293,7 +293,7 @@ def train_and_evaluate():
     lr_schedule = tf.keras.optimizers.schedules.PiecewiseConstantDecay(
       boundaries=LR_BOUNDARIES, values=values.tolist())
   elif FLAGS.lr_decay_fn == "constant":
-    lr_schedule = FLAGS.lr_base
+    lr_schedule = ConstantLR(FLAGS.lr_base)
   optimizer = Adam(learning_rate=lr_schedule)
   # Get LossScaleOptimizer
   if FLAGS.mixed_precision:
@@ -568,6 +568,16 @@ class LossScaleOptimizer(tf.keras.mixed_precision.experimental.LossScaleOptimize
   def finish_epoch(self):
     """Increment epoch count"""
     return self._optimizer.finish_epoch()
+
+class ConstantLR(tf.keras.optimizers.schedules.LearningRateSchedule):
+  """Constant learning rate wrapped in LearningRateSchedule"""
+  def __init__(self, learning_rate, name=None):
+    super(ConstantLR, self).__init__()
+    self.learning_rate = learning_rate
+    self.name = name
+  def __call__(self, step):
+    with tf.name_scope(self.name or "Constant"):
+      return self.learning_rate
 
 def main(arg=None):
   if FLAGS.mode == 'train_and_evaluate':
