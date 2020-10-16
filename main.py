@@ -21,6 +21,7 @@ import fic
 import clemson
 import video_resnet_cnn_lstm
 import inert_resnet_cnn_lstm
+import inert_kyritsis_cnn_lstm
 
 # Representation
 # Event class vals will be consecutive numbers after DEF_VAL
@@ -77,8 +78,8 @@ flags.DEFINE_enum(name='mode',
   default="train_and_evaluate", enum_values=["train_and_evaluate", "predict"],
   help='What mode should tensorflow be started in')
 flags.DEFINE_enum(name='model',
-  default='inert_small_cnn_lstm',
-  enum_values=["video_resnet_cnn_lstm", "video_resnet_cnn", "inert_resnet_cnn_lstm"],
+  default='inert_resnet_cnn_lstm',
+  enum_values=["video_resnet_cnn_lstm", "inert_resnet_cnn_lstm", "inert_kyritsis_cnn_lstm"],
   help='Select the model')
 flags.DEFINE_string(name='model_ckpt',
   default=None, help='Model checkpoint for prediction (e.g., model_5000).')
@@ -123,9 +124,6 @@ def _get_model(model, dataset, num_classes, input_length, l2_lambda):
   if model == "video_resnet_cnn_lstm":
     model = video_resnet_cnn_lstm.Model(num_classes=num_classes,
       input_length=input_length, l2_lambda=l2_lambda)
-  elif model == "video_resnet_cnn":
-    model = video_resnet_cnn.Model(num_classes=num_classes,
-      input_length=input_length, l2_lambda=l2_lambda)
   elif model == "inert_resnet_cnn_lstm":
     if dataset == "oreba-dis":
       specs = {
@@ -158,6 +156,19 @@ def _get_model(model, dataset, num_classes, input_length, l2_lambda):
         "lstm_specs": [(64, False)]
       }
     model = inert_resnet_cnn_lstm.Model(num_classes=num_classes,
+      input_length=input_length, specs=specs, l2_lambda=l2_lambda)
+  elif model == "inert_kyritsis_cnn_lstm":
+    if dataset == "oreba-dis":
+      specs = {
+        "seq_pool": 4,
+        "conv_layer_specs": [(64, 6, True), (128, 6, True)]
+      }
+    elif dataset == "clemson":
+      specs = {
+        "seq_pool": 1,
+        "conv_layer_specs": [(64, 3, False), (128, 3, False)]
+      }
+    model = inert_kyritsis_cnn_lstm.Model(num_classes=num_classes,
       input_length=input_length, specs=specs, l2_lambda=l2_lambda)
   else:
     raise ValueError("Model not implemented for {}!".format(model))
