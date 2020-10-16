@@ -10,11 +10,13 @@ import tensorflow as tf
 class ConvLayer(tf.keras.layers.Layer):
   """One conv layer, potentially with max pooling"""
 
-  def __init__(self, filters, kernel_size, use_pooling):
+  def __init__(self, filters, kernel_size, use_pooling, l2_lambda):
     super(ConvLayer, self).__init__()
     self.use_pooling = use_pooling
     self.conv1d = tf.keras.layers.Conv1D(
-      filters=filters, kernel_size=kernel_size, padding="same")
+      filters=filters, kernel_size=kernel_size, padding="same",
+      kernel_initializer=tf.keras.initializers.VarianceScaling(),
+      kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
     if self.use_pooling:
       self.max_pool = tf.keras.layers.MaxPool1D(pool_size=2)
 
@@ -35,27 +37,23 @@ class Model(tf.keras.Model):
     self.conv_layers = []
     for i, (filters, kernel_size, use_pooling) in enumerate(specs["conv_layer_specs"]):
       self.conv_layers.append(ConvLayer(
-        filters=filters, kernel_size=kernel_size, use_pooling=use_pooling))
+        filters=filters, kernel_size=kernel_size, use_pooling=use_pooling,
+        l2_lambda=l2_lambda))
     self.dense_1 = tf.keras.layers.Dense(units=5, activation="relu")
-    self.lstm_1 = tf.keras.layers.LSTM(units=64, return_sequences=True)
-    self.lstm_2 = tf.keras.layers.LSTM(units=64, return_sequences=True)
+    self.lstm_1 = tf.keras.layers.LSTM(units=64, return_sequences=True,
+      kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
+    self.lstm_2 = tf.keras.layers.LSTM(units=64, return_sequences=True,
+      kernel_regularizer=tf.keras.regularizers.l2(l2_lambda))
     self.dense_2 = tf.keras.layers.Dense(units=num_classes, activation="sigmoid")
 
   @tf.function
   def call(self, inputs, training=False):
-    print(inputs)
     for conv_layer in self.conv_layers:
       inputs = conv_layer(inputs, training=training)
-      print(inputs)
     inputs = self.dense_1(inputs)
-    print(inputs)
     inputs = self.lstm_1(inputs)
-    print(inputs)
     inputs = self.lstm_2(inputs)
-    print(inputs)
     inputs = self.dense_2(inputs)
-    print(inputs)
-    exit()
     return inputs
 
   def get_label_fn(self, batch_size=None):
