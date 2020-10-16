@@ -21,6 +21,7 @@ import fic
 import clemson
 import video_resnet_cnn_lstm
 import inert_resnet_cnn_lstm
+import inert_heydarian_cnn_lstm
 import inert_kyritsis_cnn_lstm
 
 # Representation
@@ -79,7 +80,7 @@ flags.DEFINE_enum(name='mode',
   help='What mode should tensorflow be started in')
 flags.DEFINE_enum(name='model',
   default='inert_resnet_cnn_lstm',
-  enum_values=["video_resnet_cnn_lstm", "inert_resnet_cnn_lstm", "inert_kyritsis_cnn_lstm"],
+  enum_values=["video_resnet_cnn_lstm", "inert_resnet_cnn_lstm", "inert_kyritsis_cnn_lstm", "inert_heydarian_cnn_lstm"],
   help='Select the model')
 flags.DEFINE_string(name='model_ckpt',
   default=None, help='Model checkpoint for prediction (e.g., model_5000).')
@@ -170,6 +171,9 @@ def _get_model(model, dataset, num_classes, input_length, l2_lambda):
       }
     model = inert_kyritsis_cnn_lstm.Model(num_classes=num_classes,
       input_length=input_length, specs=specs, l2_lambda=l2_lambda)
+  elif model == "inert_heydarian_cnn_lstm":
+    model = inert_heydarian_cnn_lstm.Model(num_classes=num_classes,
+      input_length=input_length, l2_lambda=l2_lambda)
   else:
     raise ValueError("Model not implemented for {}!".format(model))
   return model
