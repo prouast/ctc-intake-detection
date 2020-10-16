@@ -68,8 +68,8 @@ flags.DEFINE_enum(name='loss_mode',
 flags.DEFINE_float(name='lr_base',
   default=1e-3, help='Base learning rate.')
 flags.DEFINE_enum(name='lr_decay_fn',
-  default="exponential", enum_values=["exponential", "piecewise_constant"],
-  help='What is the input mode')
+  default="exponential", enum_values=["constant", "exponential", "piecewise_constant"],
+  help='How does learning rate decay')
 flags.DEFINE_float(name='lr_decay_rate',
   default=0.9, help='Decay for exponential learning rate.')
 flags.DEFINE_boolean(name='mixed_precision',
@@ -292,6 +292,8 @@ def train_and_evaluate():
     values = np.divide(FLAGS.lr_base, LR_VALUE_DIV)
     lr_schedule = tf.keras.optimizers.schedules.PiecewiseConstantDecay(
       boundaries=LR_BOUNDARIES, values=values.tolist())
+  elif FLAGS.lr_decay_fn == "constant":
+    lr_schedule = FLAGS.lr_base
   optimizer = Adam(learning_rate=lr_schedule)
   # Get LossScaleOptimizer
   if FLAGS.mixed_precision:
