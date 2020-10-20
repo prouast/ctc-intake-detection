@@ -17,6 +17,9 @@ PAD_VAL = 0
 FLAGS = flags.FLAGS
 flags.DEFINE_integer(name='beam_width',
   default=10, help='Beam width to use.')
+flags.DEFINE_enum(name='decode_fn',
+  default='beam_search', enum_values=["greedy", "beam_search"],
+  help='Select the decode fn')
 flags.DEFINE_string(name='logits_dir',
   default='predict/logits', help='Directory for logits tfrecord files.')
 flags.DEFINE_integer(name='num_classes',
@@ -44,7 +47,7 @@ def main(arg=None):
   num_classes = FLAGS.num_classes
   rep = Representation(blank_index=BLANK_INDEX, def_val=DEF_VAL,
     loss_mode=None, num_event_classes=num_classes-1,
-    pad_val=PAD_VAL, use_def=False, decode_fn="beam_search",
+    pad_val=PAD_VAL, use_def=False, decode_fn=FLAGS.decode_fn,
     beam_width=FLAGS.beam_width)
   rep.set_seq_length(seq_length)
   metrics = PredMetrics(rep)
