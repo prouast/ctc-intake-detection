@@ -6,15 +6,16 @@ import csv
 import glob
 import numpy as np
 import os
+from scipy.special import softmax
 import sys
 
 CSV_SUFFIX = '*.csv'
 
 np.set_printoptions(threshold=sys.maxsize)
 
-def import_probs_and_labels(filepath, col_label, col_prob, classes):
+def import_probs_and_labels(args):
   """Import probabilities and labels from csv"""
-  filenames = sorted(glob.glob(os.path.join(filepath, CSV_SUFFIX)))
+  filenames = sorted(glob.glob(os.path.join(args.input_dir, CSV_SUFFIX)))
   assert filenames, "No files found for evaluation"
   labels = {}
   probs = {}
@@ -23,11 +24,14 @@ def import_probs_and_labels(filepath, col_label, col_prob, classes):
     probs[filename] = []
     with open(filename) as dest_f:
       for row in csv.reader(dest_f, delimiter=','):
-        labels[filename].append(int(float(row[col_label])))
-        probs_t = []
-        for i, _ in enumerate(classes):
-          probs_t.append(float(row[col_prob + i]))
-        probs[filename].append(probs_t)
+        labels[filename].append(int(float(row[args.col_label])))
+        all_inputs_t = []
+        for i in range(args.num_event_classes + 1):
+          all_inputs_t.append(float(row[args.col_input + i]))
+        if args.input_format == "probs":
+          probs[filename].append(np.array(all_inputs_t)[1:].tolist())
+        elif args.input_format == "logits":
+          probs[filename].append(softmax(all_inputs_t)[1:].tolist())
     labels[filename] = np.array(labels[filename])
     probs[filename] = np.array(probs[filename])
   return probs, labels
@@ -37,10 +41,13 @@ def max_search(probs, threshold, mindist, def_val):
   # Threshold probs without default event probs
   probabilities = np.copy(probs)
   probabilities[probabilities <= threshold] = 0
+  # Return array
+  detections = np.empty(np.shape(probabilities)[0], dtype=np.int32)
+  detections.fill(def_val)
   # Potential detections
   idx_p = np.where(probabilities > 0)[0]
-  if (idx_p.size == 0):
-    return np.zeros(probs.shape)
+  if idx_p.size == 0:
+    return detections
   # Identify start and end of detections
   p_d = np.diff(idx_p) - 1
   p = np.where(p_d > 0)[0]
@@ -65,8 +72,6 @@ def max_search(probs, threshold, mindist, def_val):
   else:
     idx_max_mindist = idx_max
   # Return detections
-  detections = np.empty(np.shape(probabilities)[0], dtype=np.int32)
-  detections.fill(def_val)
   detections[idx_max_mindist] = np.argmax(probabilities[idx_max_mindist], axis=-1) + def_val + 1
   return detections
 
@@ -113,7 +118,7 @@ def main(args=None):
   # Event classes excluding default/idle
   event_classes = range(args.def_val + 1, args.def_val + args.num_event_classes + 1, 1)
   # Import the probs and labels from csv
-  probs, labels = import_probs_and_labels(args.prob_dir, args.col_label, args.col_prob, event_classes)
+  probs, labels = import_probs_and_labels(args)
   # Perform grid search
   if args.mode == 'estimate':
     # Collect all in one array
@@ -225,7 +230,7 @@ def main(args=None):
 # Run
 if __name__ == '__main__':
   parser = argparse.ArgumentParser(description='Evaluate model Stage II')
-  parser.add_argument('--prob_dir', type=str, default='eval', nargs='?', help='Directory with eval data.')
+  parser.add_argument('--input_dir', type=str, default='eval', nargs='?', help='Directory with eval data.')
   parser.add_argument('--min_dist', type=int, default=16, nargs='?', help='Minimum frames between detections.')
   parser.add_argument('--threshold', type=float, default=0.9, nargs='?', help='Detection threshold probability')
   parser.add_argument('--mode', type=str, default='evaluate', nargs='?', help='Evaluation or estimation and evaluation')
@@ -233,8 +238,9 @@ if __name__ == '__main__':
   parser.add_argument('--max_threshold', type=float, default=1, nargs='?', help='Maximum detection threshold probability')
   parser.add_argument('--inc_threshold', type=float, default=0.001, nargs='?', help='Increment for detection threshold search')
   parser.add_argument('--col_label', type=int, default=1, nargs='?', help='Col number of label in csv')
-  parser.add_argument('--col_prob', type=int, default=2, nargs='?', help='First col number of event class probability in csv')
+  parser.add_argument('--col_input', type=int, default=2, nargs='?', help='First col number of event class logits or probs input in csv')
   parser.add_argument('--num_event_classes', type=int, default=1, nargs='?', help='Number of event classes excluding default/idle')
   parser.add_argument('--def_val', type=int, default=1, nargs='?', help='Value denoting default/idle event')
+  parser.add_argument('--input_format', type=str, default='probs', choices=('probs', 'logits'), help='Format of the input class values')
   args = parser.parse_args()
   main(args)

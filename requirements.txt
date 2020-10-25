@@ -2,3 +2,4 @@ tensorflow
 tensorflow_addons
 tensorflow_ctc_ext_beam_search_decoder
 psutil
+scipy
