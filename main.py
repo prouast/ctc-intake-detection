@@ -469,6 +469,9 @@ def predict():
     export_csv = os.path.join(FLAGS.predict_dir, str(video_id) + ".csv")
     export_tfrecord = os.path.join(FLAGS.predict_dir, "logits", str(video_id) + ".tfrecord")
     logging.info("Working on {0}.".format(video_id))
+    if os.path.exists(export_csv) and os.path.exists(export_tfrecord):
+      logging.info("Export files already exist. Skipping {0}.".format(filename))
+      continue
     # Get the dataset
     label_fn = model.get_label_fn(1)
     collapse_fn = rep.get_loss_collapse_fn()
