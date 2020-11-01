@@ -524,6 +524,9 @@ class TrainMetrics():
         self.metrics['mean_recall'](self.metrics['class_{}_recall'.format(i)].result())
         self.metrics['mean_f1'](self.metrics['class_{}_f1'.format(i)].result())
     else:
+      # Collapse seq_length dim if 1
+      labels = tf.squeeze(labels, axis=1)
+      logits = tf.squeeze(logits, axis=1)
       for i in self.all_classes:
         self.metrics['class_{}_precision'.format(i)](labels, logits)
         self.metrics['class_{}_recall'.format(i)](labels, logits)
@@ -614,6 +617,9 @@ class EvalMetrics():
       self.__instantiate_frame_metrics()
 
   def update_i(self, labels, logits, predictions_u):
+    # Collapse seq_length dim if 1
+    labels = tf.squeeze(labels, axis=1)
+    logits = tf.squeeze(logits, axis=1)
     if self.loss_mode == "ctc":
       for i in self.event_classes:
         self.metrics['class_{}_tp_fp1_fp2_fp3_fn'.format(i)](labels, predictions_u)

@@ -308,16 +308,26 @@ class Representation():
       tf.debugging.assert_less_equal(labels, self.num_event_classes)
       tf.debugging.assert_greater_equal(labels, 0)
       # Calculate cross entropy
-      seq_weights = tf.ones_like(labels, dtype=tf.float32)
-      loss = tfa.seq2seq.sequence_loss(
-        logits=logits,
-        targets=labels,
-        weights=seq_weights,
-        average_across_timesteps=True,
-        average_across_batch=False)
+      if self.seq_length == 1:
+        # Standard loss
+        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
+          labels=tf.squeeze(labels, axis=1),
+          logits=tf.squeeze(logits, axis=1))
+        loss = tf.cast(loss, tf.float32)
+      else:
+        # Sequence loss
+        seq_weights = tf.ones_like(labels, dtype=tf.float32)
+        loss = tfa.seq2seq.sequence_loss(
+          logits=logits,
+          targets=labels,
+          weights=seq_weights,
+          average_across_timesteps=True,
+          average_across_batch=False)
       batch_weights = balanced_sample_weight(labels_c, None)
       return tf.reduce_mean(batch_weights * loss)
     if self.loss_mode == "ctc":
+      # Make sure seq_length is not 1
+      assert self.seq_length > 1, "seq_length must be greater than 1"
       return ctc_loss_fn
     else:
       return crossent_loss_fn

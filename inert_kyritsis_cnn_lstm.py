@@ -86,3 +86,6 @@ class Model(tf.keras.Model):
 
   def get_seq_pool(self):
     return self.seq_pool
+
+  def get_out_pool(self):
+    return self.seq_pool

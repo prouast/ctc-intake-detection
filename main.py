@@ -344,9 +344,13 @@ def train_and_evaluate():
 
     # Iterate over training batches
     for step, (train_features, train_labels, train_labels_c, train_labels_l) in enumerate(train_dataset):
+      # Assert sizes
+      assert train_labels.shape == [FLAGS.batch_size, seq_length], "Labels shape [batch_size, seq_length]"
       # Run the train step
       train_logits, train_loss, train_l2_loss, train_grads = train_step(model,
         train_features, train_labels, train_labels_c, train_labels_l, train_loss_fn, optimizer)
+      # Assert sizes
+      assert train_logits.shape == [FLAGS.batch_size, seq_length, rep.get_num_classes()], "Logits shape [batch_size, seq_length, num_classes]"
       # Log every FLAGS.log_steps steps.
       if global_step % FLAGS.log_steps == 0:
         logging.info("Memory used: {} GB".format(psutil.virtual_memory().used/2**30))
@@ -383,11 +387,15 @@ def train_and_evaluate():
         eval_l2_losses = []
         # Iterate through eval batches
         for i, (eval_features, eval_labels, eval_labels_c, eval_labels_l) in enumerate(eval_dataset):
+          # Assert sizes
+          assert eval_labels.shape == [FLAGS.eval_batch_size, seq_length], "Labels shape [batch_size, seq_length]"
           # Run the eval step
           eval_logits, eval_loss, eval_l2_loss = eval_step(model,
             eval_features, eval_labels, eval_labels_c, eval_labels_l, eval_loss_fn)
           eval_losses.append(eval_loss.numpy())
           eval_l2_losses.append(eval_l2_loss.numpy())
+          # Assert sizes
+          assert eval_logits.shape == [FLAGS.eval_batch_size, seq_length, rep.get_num_classes()], "Logits shape [batch_size, seq_length, num_classes]"
           # Decode logits into predictions
           eval_predictions_u = None
           if FLAGS.loss_mode == "ctc":
@@ -454,8 +462,8 @@ def predict():
   seq_length = model.get_seq_length()
   rep.set_seq_length(seq_length)
   # Make sure that seq_shift is set corresponding to model SEQ_POOL
-  assert FLAGS.seq_shift == model.get_seq_pool(), \
-    "seq_shift should be equal to model.get_seq_pool() in predict"
+  assert FLAGS.seq_shift == model.get_out_pool(), \
+    "seq_shift should be equal to model.get_out_pool() in predict"
   # Load weights
   model.load_weights(os.path.join(FLAGS.model_dir, "checkpoints", FLAGS.model_ckpt))
   # Set up metrics
@@ -482,7 +490,10 @@ def predict():
     v_seq_length = n+seq_length-1
     # Get the aggregators
     labels_aggregator = aggregation.ConcatAggregator(n=n, idx=seq_length-1)
-    logits_aggregator = aggregation.AverageAggregator(num_classes=num_classes, seq_length=seq_length)
+    if seq_length == 1:
+      logits_aggregator = aggregation.ConcatAggregator(n=n, idx=seq_length-1)
+    else:
+      logits_aggregator = aggregation.AverageAggregator(num_classes=num_classes, seq_length=seq_length)
     preds_aggregator = _get_preds_aggregator(predict_mode=FLAGS.predict_mode,
       n=n, rep=rep, v_seq_length=v_seq_length)
     # Iterate through batches
@@ -491,8 +502,11 @@ def predict():
       os.makedirs(os.path.join(FLAGS.predict_dir, "logits"))
     with tf.io.TFRecordWriter(export_tfrecord) as tfrecord_writer:
       for i, (b_features, b_labels) in enumerate(data):
+        # Assert sizes
+        assert b_labels.shape == [1, seq_length], "Labels shape [1, seq_length]"
         # Prediction step
         b_logits = pred_step(model, b_features)
+        assert b_logits.shape == [1, seq_length, rep.get_num_classes()], "Logits shape [1, seq_length, num_classes]"
         # Aggregation step
         labels_aggregator.step(i, b_labels)
         logits_aggregator.step(i, b_logits)
