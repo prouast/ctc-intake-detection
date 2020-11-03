@@ -441,6 +441,10 @@ def train_and_evaluate():
   logging.info("Finished training")
 
 def predict():
+  # Set mixed precision policy
+  if FLAGS.mixed_precision:
+    policy = mixed_precision.Policy('mixed_float16')
+    mixed_precision.set_policy(policy)
   # Make target dir
   if not os.path.exists(FLAGS.predict_dir):
     os.makedirs(FLAGS.predict_dir)
